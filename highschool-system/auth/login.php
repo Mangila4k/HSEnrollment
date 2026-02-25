@@ -387,7 +387,7 @@ if(isset($_POST['login'])){
         <div class="login-panel">
             <div class="logo-section">
                 <div class="school-logo">
-                    <span>PLS</span>
+                    <span>PNHS</span>
                 </div>
                 <div class="school-name">
                     <h1>Placido L. Señor<br>Senior High School</h1>

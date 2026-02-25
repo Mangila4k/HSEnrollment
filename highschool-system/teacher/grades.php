@@ -13,24 +13,48 @@ $teacher_name = $_SESSION['user']['fullname'];
 $success_message = '';
 $error_message = '';
 
-// Get sections where teacher is adviser
-$sections_query = $conn->query("
-    SELECT s.*, g.grade_name 
+// Check for session messages
+if(isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+
+if(isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
+// Get teacher's sections (where they are adviser)
+$sections_query = "
+    SELECT s.*, g.grade_name
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
-    WHERE s.adviser_id = '$teacher_id'
-");
+    WHERE s.adviser_id = ?
+    ORDER BY g.id, s.section_name
+";
+$stmt = $conn->prepare($sections_query);
+$stmt->bind_param("i", $teacher_id);
+$stmt->execute();
+$sections = $stmt->get_result();
+$stmt->close();
 
-// Get all subjects (or filter by teacher if you have teacher_id in subjects table)
-$subjects_query = $conn->query("SELECT * FROM subjects ORDER BY subject_name");
+// Get teacher's subjects
+$subjects_query = "
+    SELECT sub.*, g.grade_name
+    FROM subjects sub
+    JOIN grade_levels g ON sub.grade_id = g.id
+    ORDER BY g.id, sub.subject_name
+";
+$subjects = $conn->query($subjects_query);
 
-// Get students for selected section
+// Get selected section and subject from URL
 $selected_section = isset($_GET['section_id']) ? $_GET['section_id'] : '';
 $selected_subject = isset($_GET['subject_id']) ? $_GET['subject_id'] : '';
-$selected_date = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+$selected_quarter = isset($_GET['quarter']) ? $_GET['quarter'] : '1st Quarter';
 
+// Get students for selected section
 $students_list = [];
-if($selected_section && $selected_subject) {
+if($selected_section) {
     // Get grade_id from section
     $section_info = $conn->query("SELECT grade_id FROM sections WHERE id = '$selected_section'")->fetch_assoc();
     $grade_id = $section_info['grade_id'];
@@ -47,85 +71,109 @@ if($selected_section && $selected_subject) {
     ");
     
     while($student = $students_query->fetch_assoc()) {
-        // Check if attendance already recorded for this student on this date and subject
-        $attendance_check = $conn->query("
-            SELECT * FROM attendance 
+        // Check if grade already exists for this student, subject, and quarter
+        $grade_check = $conn->query("
+            SELECT * FROM grades 
             WHERE student_id = '{$student['id']}' 
             AND subject_id = '$selected_subject'
-            AND date = '$selected_date'
+            AND quarter = '$selected_quarter'
         ");
         
-        $student['attendance_recorded'] = ($attendance_check->num_rows > 0);
-        if($student['attendance_recorded']) {
-            $student['attendance'] = $attendance_check->fetch_assoc();
+        $student['grade_recorded'] = ($grade_check->num_rows > 0);
+        if($student['grade_recorded']) {
+            $student['grade'] = $grade_check->fetch_assoc();
         }
         
         $students_list[] = $student;
     }
 }
 
-// Handle attendance submission
-if(isset($_POST['save_attendance'])) {
+// Handle grade submission
+if(isset($_POST['save_grades'])) {
     $subject_id = $_POST['subject_id'];
     $section_id = $_POST['section_id'];
-    $attendance_date = $_POST['attendance_date'];
+    $quarter = $_POST['quarter'];
     $student_ids = $_POST['student_ids'] ?? [];
-    $statuses = $_POST['status'] ?? [];
+    $grades = $_POST['grades'] ?? [];
+    $remarks = $_POST['remarks'] ?? [];
     
     $conn->begin_transaction();
     
     try {
         foreach($student_ids as $index => $student_id) {
-            $status = $statuses[$index] ?? 'Absent';
+            $grade_value = $grades[$index] ?? null;
+            $remark = $remarks[$index] ?? '';
             
-            // Check if attendance already exists
+            // Skip if grade is empty
+            if($grade_value === '' || $grade_value === null) {
+                continue;
+            }
+            
+            // Validate grade range (0-100)
+            if($grade_value < 0 || $grade_value > 100) {
+                throw new Exception("Grade must be between 0 and 100");
+            }
+            
+            // Check if grade already exists
             $check = $conn->query("
-                SELECT id FROM attendance 
+                SELECT id FROM grades 
                 WHERE student_id = '$student_id' 
                 AND subject_id = '$subject_id'
-                AND date = '$attendance_date'
+                AND quarter = '$quarter'
             ");
             
             if($check->num_rows > 0) {
-                // Update existing attendance
-                $attendance_id = $check->fetch_assoc()['id'];
+                // Update existing grade
+                $grade_id = $check->fetch_assoc()['id'];
                 $update = $conn->query("
-                    UPDATE attendance 
-                    SET status = '$status'
-                    WHERE id = '$attendance_id'
+                    UPDATE grades 
+                    SET grade = '$grade_value', remarks = '$remark'
+                    WHERE id = '$grade_id'
                 ");
             } else {
-                // Insert new attendance
+                // Insert new grade
                 $insert = $conn->query("
-                    INSERT INTO attendance (student_id, subject_id, date, status)
-                    VALUES ('$student_id', '$subject_id', '$attendance_date', '$status')
+                    INSERT INTO grades (student_id, subject_id, quarter, grade, remarks)
+                    VALUES ('$student_id', '$subject_id', '$quarter', '$grade_value', '$remark')
                 ");
             }
         }
         
         $conn->commit();
-        $success_message = "Attendance saved successfully!";
+        $success_message = "Grades saved successfully!";
         
-        // Redirect to refresh with the same parameters
-        header("Location: attendance.php?section_id=$section_id&subject_id=$subject_id&date=$attendance_date&saved=1");
+        // Refresh the page
+        header("Location: grades.php?section_id=$section_id&subject_id=$subject_id&quarter=$quarter&saved=1");
         exit();
         
     } catch (Exception $e) {
         $conn->rollback();
-        $error_message = "Error saving attendance: " . $e->getMessage();
+        $error_message = "Error saving grades: " . $e->getMessage();
     }
 }
 
-// Handle delete attendance record
-if(isset($_GET['delete_id'])) {
-    $delete_id = $_GET['delete_id'];
-    $delete = $conn->query("DELETE FROM attendance WHERE id = '$delete_id'");
-    if($delete) {
-        $success_message = "Attendance record deleted successfully!";
-    } else {
-        $error_message = "Error deleting attendance record.";
+// Get grade statistics if subject and section are selected
+$statistics = [];
+if($selected_subject && $selected_section && !empty($students_list)) {
+    $grade_values = [];
+    foreach($students_list as $student) {
+        if(isset($student['grade']['grade'])) {
+            $grade_values[] = $student['grade']['grade'];
+        }
+    }
+    
+    if(!empty($grade_values)) {
+        $statistics['average'] = array_sum($grade_values) / count($grade_values);
+        $statistics['highest'] = max($grade_values);
+        $statistics['lowest'] = min($grade_values);
+        $statistics['passed'] = count(array_filter($grade_values, function($g) { return $g >= 75; }));
+        $statistics['failed'] = count(array_filter($grade_values, function($g) { return $g < 75; }));
+        $statistics['total'] = count($grade_values);
     }
 }
+
+// Quarters
+$quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 ?>
 
 <!DOCTYPE html>
@@ -133,7 +181,7 @@ if(isset($_GET['delete_id'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Take Attendance - Teacher Dashboard</title>
+    <title>Grade Management - Teacher Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -397,6 +445,80 @@ if(isset($_GET['delete_id'])) {
             font-size: 20px;
         }
 
+        /* Stats Cards */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(135deg, rgba(11, 79, 46, 0.1) 0%, rgba(26, 122, 66, 0.1) 100%);
+            border-radius: 50%;
+            transform: translate(30px, -30px);
+        }
+
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .stat-header h3 {
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-icon {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
         /* Filter Card */
         .filter-card {
             background: white;
@@ -481,15 +603,46 @@ if(isset($_GET['delete_id'])) {
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
-        /* Attendance Table Card */
-        .attendance-card {
+        /* Statistics Panel */
+        .stats-panel {
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            color: white;
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 20px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        .stat-item .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 5px;
+            color: #FFD700;
+        }
+
+        .stat-item .stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        /* Grade Table Card */
+        .grade-card {
             background: white;
             border-radius: 15px;
             padding: 25px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .attendance-header {
+        .grade-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -498,7 +651,7 @@ if(isset($_GET['delete_id'])) {
             gap: 15px;
         }
 
-        .attendance-header h3 {
+        .grade-header h3 {
             color: var(--text-primary);
             font-size: 18px;
             font-weight: 600;
@@ -507,7 +660,7 @@ if(isset($_GET['delete_id'])) {
             gap: 10px;
         }
 
-        .attendance-header h3 i {
+        .grade-header h3 i {
             color: #0B4F2E;
         }
 
@@ -517,7 +670,7 @@ if(isset($_GET['delete_id'])) {
         }
 
         .btn-batch {
-            padding: 10px 20px;
+            padding: 8px 16px;
             border: none;
             border-radius: 8px;
             font-size: 13px;
@@ -526,49 +679,39 @@ if(isset($_GET['delete_id'])) {
             transition: all 0.3s;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 5px;
         }
 
-        .btn-present-all {
+        .btn-pass {
             background: rgba(40, 167, 69, 0.1);
             color: #28a745;
         }
 
-        .btn-present-all:hover {
+        .btn-pass:hover {
             background: #28a745;
             color: white;
         }
 
-        .btn-absent-all {
+        .btn-fail {
             background: rgba(220, 53, 69, 0.1);
             color: #dc3545;
         }
 
-        .btn-absent-all:hover {
+        .btn-fail:hover {
             background: #dc3545;
             color: white;
-        }
-
-        .btn-late-all {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
-        }
-
-        .btn-late-all:hover {
-            background: #ffc107;
-            color: #2b2d42;
         }
 
         .table-container {
             overflow-x: auto;
         }
 
-        .attendance-table {
+        .grades-table {
             width: 100%;
             border-collapse: collapse;
         }
 
-        .attendance-table th {
+        .grades-table th {
             text-align: left;
             padding: 15px;
             background: #f8f9fa;
@@ -579,10 +722,14 @@ if(isset($_GET['delete_id'])) {
             letter-spacing: 0.5px;
         }
 
-        .attendance-table td {
+        .grades-table td {
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
+        }
+
+        .grades-table tbody tr:hover {
+            background: var(--hover-color);
         }
 
         .student-info {
@@ -615,95 +762,61 @@ if(isset($_GET['delete_id'])) {
             color: var(--text-secondary);
         }
 
-        .status-radio-group {
-            display: flex;
-            gap: 10px;
-        }
-
-        .status-radio {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            cursor: pointer;
-        }
-
-        .status-radio input[type="radio"] {
-            display: none;
-        }
-
-        .status-radio .radio-label {
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
+        .grade-input {
+            width: 80px;
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 14px;
+            text-align: center;
             transition: all 0.3s;
-            border: 2px solid transparent;
         }
 
-        .status-radio input[type="radio"]:checked + .radio-label {
+        .grade-input:focus {
             border-color: #0B4F2E;
-            transform: scale(1.05);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(11, 79, 46, 0.1);
         }
 
-        .status-present .radio-label {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
+        .grade-input.passing {
+            border-color: #28a745;
+            background: rgba(40, 167, 69, 0.05);
         }
 
-        .status-absent .radio-label {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
+        .grade-input.failing {
+            border-color: #dc3545;
+            background: rgba(220, 53, 69, 0.05);
         }
 
-        .status-late .radio-label {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
+        .remarks-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 13px;
+            transition: all 0.3s;
         }
 
-        .status-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
+        .remarks-input:focus {
+            border-color: #0B4F2E;
+            outline: none;
+        }
+
+        .grade-badge {
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
             font-weight: 600;
             display: inline-block;
         }
 
-        .status-present {
+        .grade-badge.passing {
             background: rgba(40, 167, 69, 0.1);
             color: #28a745;
         }
 
-        .status-absent {
+        .grade-badge.failing {
             background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-        }
-
-        .status-late {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
-        }
-
-        .action-btns {
-            display: flex;
-            gap: 8px;
-        }
-
-        .btn-icon {
-            width: 35px;
-            height: 35px;
-            border-radius: 8px;
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: transparent;
-            color: var(--text-secondary);
-        }
-
-        .btn-icon:hover {
-            background: var(--hover-color);
             color: #dc3545;
         }
 
@@ -757,8 +870,8 @@ if(isset($_GET['delete_id'])) {
 
         /* Responsive */
         @media (max-width: 1200px) {
-            .filter-grid {
-                grid-template-columns: 1fr;
+            .stats-panel {
+                grid-template-columns: repeat(3, 1fr);
             }
         }
 
@@ -792,20 +905,35 @@ if(isset($_GET['delete_id'])) {
                 padding: 20px;
             }
             
+            .dashboard-header {
+                flex-direction: column;
+                gap: 15px;
+                align-items: flex-start;
+            }
+            
             .welcome-card {
                 flex-direction: column;
                 text-align: center;
                 gap: 20px;
             }
             
-            .attendance-header {
+            .stats-container,
+            .stats-panel {
+                grid-template-columns: 1fr;
+            }
+            
+            .filter-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .grade-header {
                 flex-direction: column;
                 align-items: flex-start;
             }
             
-            .status-radio-group {
+            .student-info {
                 flex-direction: column;
-                gap: 5px;
+                text-align: center;
             }
         }
     </style>
@@ -823,7 +951,7 @@ if(isset($_GET['delete_id'])) {
                 <div class="teacher-avatar">
                     <?php echo strtoupper(substr($teacher_name, 0, 1)); ?>
                 </div>
-                <h3><?php echo htmlspecialchars($teacher_name); ?></h3>
+                <h3><?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?></h3>
                 <p><i class="fas fa-chalkboard-teacher"></i> Teacher</p>
             </div>
             
@@ -831,10 +959,10 @@ if(isset($_GET['delete_id'])) {
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php" class="active"><i class="fas fa-calendar-check"></i> <span>Take Attendance</span></a></li>
+                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
                     <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
-                    <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
+                    <li><a href="grades.php" class="active"><i class="fas fa-star"></i> <span>Grades</span></a></li>
                 </ul>
             </div>
 
@@ -851,8 +979,8 @@ if(isset($_GET['delete_id'])) {
         <div class="main-content">
             <!-- Header -->
             <div class="dashboard-header">
-                <h1>Take Attendance</h1>
-                <p>Record and manage student attendance for your classes</p>
+                <h1>Grade Management</h1>
+                <p>Record and manage student grades</p>
             </div>
 
             <!-- Welcome Card -->
@@ -866,7 +994,7 @@ if(isset($_GET['delete_id'])) {
                 </a>
             </div>
 
-            <!-- Success/Error Messages -->
+            <!-- Alert Messages -->
             <?php if($success_message): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i>
@@ -884,9 +1012,64 @@ if(isset($_GET['delete_id'])) {
             <?php if(isset($_GET['saved'])): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i>
-                    Attendance saved successfully!
+                    Grades saved successfully!
                 </div>
             <?php endif; ?>
+
+            <!-- Quick Stats -->
+            <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>My Sections</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-layer-group"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $sections ? $sections->num_rows : 0; ?></div>
+                    <div class="stat-label">Classes handling</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Subjects</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-book"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $subjects ? $subjects->num_rows : 0; ?></div>
+                    <div class="stat-label">Subjects taught</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Students</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-user-graduate"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo count($students_list); ?></div>
+                    <div class="stat-label">In selected section</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>With Grades</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-star"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number">
+                        <?php 
+                        $graded = 0;
+                        foreach($students_list as $s) {
+                            if($s['grade_recorded']) $graded++;
+                        }
+                        echo $graded;
+                        ?>
+                    </div>
+                    <div class="stat-label">Records entered</div>
+                </div>
+            </div>
 
             <!-- Filter Card -->
             <div class="filter-card">
@@ -897,8 +1080,8 @@ if(isset($_GET['delete_id'])) {
                             <label><i class="fas fa-layer-group"></i> Section</label>
                             <select name="section_id" required>
                                 <option value="">Select Section</option>
-                                <?php if($sections_query && $sections_query->num_rows > 0): ?>
-                                    <?php while($section = $sections_query->fetch_assoc()): ?>
+                                <?php if($sections && $sections->num_rows > 0): ?>
+                                    <?php while($section = $sections->fetch_assoc()): ?>
                                         <option value="<?php echo $section['id']; ?>" 
                                             <?php echo ($selected_section == $section['id']) ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($section['section_name'] . ' - ' . $section['grade_name']); ?>
@@ -914,11 +1097,14 @@ if(isset($_GET['delete_id'])) {
                             <label><i class="fas fa-book"></i> Subject</label>
                             <select name="subject_id" required>
                                 <option value="">Select Subject</option>
-                                <?php if($subjects_query && $subjects_query->num_rows > 0): ?>
-                                    <?php while($subject = $subjects_query->fetch_assoc()): ?>
+                                <?php if($subjects && $subjects->num_rows > 0): ?>
+                                    <?php 
+                                    $subjects->data_seek(0);
+                                    while($subject = $subjects->fetch_assoc()): 
+                                    ?>
                                         <option value="<?php echo $subject['id']; ?>" 
                                             <?php echo ($selected_subject == $subject['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($subject['subject_name']); ?>
+                                            <?php echo htmlspecialchars($subject['subject_name'] . ' - ' . $subject['grade_name']); ?>
                                         </option>
                                     <?php endwhile; ?>
                                 <?php endif; ?>
@@ -926,8 +1112,15 @@ if(isset($_GET['delete_id'])) {
                         </div>
 
                         <div class="filter-group">
-                            <label><i class="fas fa-calendar"></i> Date</label>
-                            <input type="date" name="date" value="<?php echo $selected_date; ?>" required>
+                            <label><i class="fas fa-chart-line"></i> Quarter</label>
+                            <select name="quarter" required>
+                                <?php foreach($quarters as $quarter): ?>
+                                    <option value="<?php echo $quarter; ?>" 
+                                        <?php echo ($selected_quarter == $quarter) ? 'selected' : ''; ?>>
+                                        <?php echo $quarter; ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
                         </div>
 
                         <div class="filter-group">
@@ -939,39 +1132,63 @@ if(isset($_GET['delete_id'])) {
                 </form>
             </div>
 
-            <!-- Attendance Form -->
+            <!-- Statistics Panel -->
+            <?php if(!empty($statistics)): ?>
+                <div class="stats-panel">
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo number_format($statistics['average'], 2); ?></div>
+                        <div class="stat-label">Class Average</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $statistics['highest']; ?></div>
+                        <div class="stat-label">Highest Grade</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $statistics['lowest']; ?></div>
+                        <div class="stat-label">Lowest Grade</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $statistics['passed']; ?></div>
+                        <div class="stat-label">Passed</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?php echo $statistics['failed']; ?></div>
+                        <div class="stat-label">Failed</div>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- Grade Entry Form -->
             <?php if(!empty($students_list)): ?>
-                <div class="attendance-card">
-                    <div class="attendance-header">
+                <div class="grade-card">
+                    <div class="grade-header">
                         <h3>
-                            <i class="fas fa-users"></i>
-                            Students List - <?php echo count($students_list); ?> students
+                            <i class="fas fa-star"></i>
+                            Grade Entry - <?php echo $selected_quarter; ?>
                         </h3>
                         <div class="batch-actions">
-                            <button type="button" class="btn-batch btn-present-all" onclick="setAllStatus('Present')">
-                                <i class="fas fa-check-circle"></i> All Present
+                            <button type="button" class="btn-batch btn-pass" onclick="setAllGrades(75)">
+                                <i class="fas fa-check-circle"></i> All Passing (75)
                             </button>
-                            <button type="button" class="btn-batch btn-absent-all" onclick="setAllStatus('Absent')">
-                                <i class="fas fa-times-circle"></i> All Absent
-                            </button>
-                            <button type="button" class="btn-batch btn-late-all" onclick="setAllStatus('Late')">
-                                <i class="fas fa-clock"></i> All Late
+                            <button type="button" class="btn-batch btn-fail" onclick="setAllGrades(65)">
+                                <i class="fas fa-times-circle"></i> All Failing (65)
                             </button>
                         </div>
                     </div>
 
-                    <form method="POST" action="" id="attendanceForm">
+                    <form method="POST" action="" id="gradesForm">
                         <input type="hidden" name="section_id" value="<?php echo $selected_section; ?>">
                         <input type="hidden" name="subject_id" value="<?php echo $selected_subject; ?>">
-                        <input type="hidden" name="attendance_date" value="<?php echo $selected_date; ?>">
+                        <input type="hidden" name="quarter" value="<?php echo $selected_quarter; ?>">
                         
                         <div class="table-container">
-                            <table class="attendance-table">
+                            <table class="grades-table">
                                 <thead>
                                     <tr>
                                         <th>Student</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
+                                        <th>ID Number</th>
+                                        <th>Grade</th>
+                                        <th>Remarks</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -984,41 +1201,36 @@ if(isset($_GET['delete_id'])) {
                                                     </div>
                                                     <div class="student-details">
                                                         <h4><?php echo htmlspecialchars($student['fullname']); ?></h4>
-                                                        <span>ID: <?php echo $student['id_number'] ?? 'N/A'; ?></span>
                                                     </div>
                                                 </div>
+                                            </td>
+                                            <td>
+                                                <span style="color: var(--text-secondary); font-size: 13px;">
+                                                    <?php echo $student['id_number'] ?? 'N/A'; ?>
+                                                </span>
                                             </td>
                                             <td>
                                                 <input type="hidden" name="student_ids[]" value="<?php echo $student['id']; ?>">
-                                                <div class="status-radio-group">
-                                                    <label class="status-radio status-present">
-                                                        <input type="radio" name="status[<?php echo $index; ?>]" value="Present" 
-                                                            <?php echo (isset($student['attendance']) && $student['attendance']['status'] == 'Present') ? 'checked' : ''; ?>
-                                                            <?php echo (!isset($student['attendance'])) ? 'checked' : ''; ?>>
-                                                        <span class="radio-label">Present</span>
-                                                    </label>
-                                                    <label class="status-radio status-absent">
-                                                        <input type="radio" name="status[<?php echo $index; ?>]" value="Absent"
-                                                            <?php echo (isset($student['attendance']) && $student['attendance']['status'] == 'Absent') ? 'checked' : ''; ?>>
-                                                        <span class="radio-label">Absent</span>
-                                                    </label>
-                                                    <label class="status-radio status-late">
-                                                        <input type="radio" name="status[<?php echo $index; ?>]" value="Late"
-                                                            <?php echo (isset($student['attendance']) && $student['attendance']['status'] == 'Late') ? 'checked' : ''; ?>>
-                                                        <span class="radio-label">Late</span>
-                                                    </label>
-                                                </div>
+                                                <input type="number" 
+                                                       name="grades[]" 
+                                                       class="grade-input <?php 
+                                                           if(isset($student['grade']['grade'])) {
+                                                               echo $student['grade']['grade'] >= 75 ? 'passing' : 'failing';
+                                                           }
+                                                       ?>" 
+                                                       value="<?php echo isset($student['grade']['grade']) ? $student['grade']['grade'] : ''; ?>"
+                                                       min="0" 
+                                                       max="100" 
+                                                       step="0.01"
+                                                       placeholder="0-100"
+                                                       oninput="validateGrade(this)">
                                             </td>
                                             <td>
-                                                <?php if(isset($student['attendance'])): ?>
-                                                    <div class="action-btns">
-                                                        <a href="?delete_id=<?php echo $student['attendance']['id']; ?>&section_id=<?php echo $selected_section; ?>&subject_id=<?php echo $selected_subject; ?>&date=<?php echo $selected_date; ?>" 
-                                                           class="btn-icon" 
-                                                           onclick="return confirm('Delete this attendance record?')">
-                                                            <i class="fas fa-trash"></i>
-                                                        </a>
-                                                    </div>
-                                                <?php endif; ?>
+                                                <input type="text" 
+                                                       name="remarks[]" 
+                                                       class="remarks-input" 
+                                                       value="<?php echo isset($student['grade']['remarks']) ? htmlspecialchars($student['grade']['remarks']) : ''; ?>"
+                                                       placeholder="Optional remarks">
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -1026,13 +1238,13 @@ if(isset($_GET['delete_id'])) {
                             </table>
                         </div>
 
-                        <button type="submit" name="save_attendance" class="btn-save">
-                            <i class="fas fa-save"></i> Save Attendance
+                        <button type="submit" name="save_grades" class="btn-save">
+                            <i class="fas fa-save"></i> Save Grades
                         </button>
                     </form>
                 </div>
             <?php elseif($selected_section && $selected_subject): ?>
-                <div class="attendance-card">
+                <div class="grade-card">
                     <div class="no-data">
                         <i class="fas fa-user-graduate"></i>
                         <h3>No Students Found</h3>
@@ -1040,11 +1252,11 @@ if(isset($_GET['delete_id'])) {
                     </div>
                 </div>
             <?php else: ?>
-                <div class="attendance-card">
+                <div class="grade-card">
                     <div class="no-data">
                         <i class="fas fa-hand-pointer"></i>
                         <h3>Select a Class and Subject</h3>
-                        <p>Please select a section, subject, and date to take attendance.</p>
+                        <p>Please select a section, subject, and quarter to enter grades.</p>
                     </div>
                 </div>
             <?php endif; ?>
@@ -1052,11 +1264,28 @@ if(isset($_GET['delete_id'])) {
     </div>
 
     <script>
-        // Function to set all status radios to the same value
-        function setAllStatus(status) {
-            const radios = document.querySelectorAll('input[type="radio"][value="' + status + '"]');
-            radios.forEach(radio => {
-                radio.checked = true;
+        // Function to validate grade input
+        function validateGrade(input) {
+            let value = parseFloat(input.value);
+            if (input.value === '') {
+                input.classList.remove('passing', 'failing');
+                return;
+            }
+            if (value >= 75) {
+                input.classList.add('passing');
+                input.classList.remove('failing');
+            } else {
+                input.classList.add('failing');
+                input.classList.remove('passing');
+            }
+        }
+
+        // Function to set all grades to a specific value
+        function setAllGrades(grade) {
+            const gradeInputs = document.querySelectorAll('.grade-input');
+            gradeInputs.forEach(input => {
+                input.value = grade;
+                validateGrade(input);
             });
         }
 
@@ -1070,6 +1299,27 @@ if(isset($_GET['delete_id'])) {
                 }, 300);
             });
         }, 5000);
+
+        // Form validation
+        document.getElementById('gradesForm')?.addEventListener('submit', function(e) {
+            const gradeInputs = document.querySelectorAll('.grade-input');
+            let hasInvalid = false;
+            
+            gradeInputs.forEach(input => {
+                if (input.value !== '') {
+                    const value = parseFloat(input.value);
+                    if (value < 0 || value > 100) {
+                        hasInvalid = true;
+                        input.style.borderColor = '#dc3545';
+                    }
+                }
+            });
+            
+            if (hasInvalid) {
+                e.preventDefault();
+                alert('Please ensure all grades are between 0 and 100');
+            }
+        });
     </script>
 </body>
 </html>

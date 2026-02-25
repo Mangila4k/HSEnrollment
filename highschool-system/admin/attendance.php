@@ -26,45 +26,72 @@ if(isset($_SESSION['error_message'])) {
 // Handle delete action
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
-    
-    // Check if teacher is assigned as adviser
-    $check_adviser = $conn->query("SELECT id FROM sections WHERE adviser_id = '$delete_id'");
-    if($check_adviser && $check_adviser->num_rows > 0) {
-        $error_message = "Cannot delete teacher because they are assigned as adviser to a section.";
+    $delete = $conn->query("DELETE FROM attendance WHERE id = '$delete_id'");
+    if($delete) {
+        $success_message = "Attendance record deleted successfully!";
     } else {
-        $delete = $conn->query("DELETE FROM users WHERE id = '$delete_id' AND role = 'Teacher'");
-        if($delete) {
-            $success_message = "Teacher deleted successfully!";
-        } else {
-            $error_message = "Error deleting teacher.";
-        }
+        $error_message = "Error deleting attendance record.";
     }
 }
 
-// Get all teachers
-$teachers = $conn->query("
-    SELECT u.*, 
-           COUNT(DISTINCT s.id) as section_count,
-           GROUP_CONCAT(DISTINCT s.section_name SEPARATOR ', ') as sections
-    FROM users u
+// Get filter parameters
+$date_filter = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
+$grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
+$section_filter = isset($_GET['section']) ? $_GET['section'] : '';
+$subject_filter = isset($_GET['subject']) ? $_GET['subject'] : '';
+$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+
+// Build the query
+$query = "
+    SELECT a.*, 
+           u.fullname as student_name,
+           u.id_number as student_id_number,
+           sub.subject_name,
+           g.grade_name,
+           s.section_name
+    FROM attendance a
+    JOIN users u ON a.student_id = u.id
+    JOIN subjects sub ON a.subject_id = sub.id
+    JOIN grade_levels g ON sub.grade_id = g.id
     LEFT JOIN sections s ON u.id = s.adviser_id
-    WHERE u.role = 'Teacher'
-    GROUP BY u.id
-    ORDER BY u.fullname
-");
+    WHERE 1=1
+";
+
+if(!empty($date_filter)) {
+    $query .= " AND a.date = '$date_filter'";
+}
+
+if(!empty($grade_filter)) {
+    $query .= " AND sub.grade_id = '$grade_filter'";
+}
+
+if(!empty($subject_filter)) {
+    $query .= " AND a.subject_id = '$subject_filter'";
+}
+
+if(!empty($status_filter)) {
+    $query .= " AND a.status = '$status_filter'";
+}
+
+$query .= " ORDER BY a.date DESC, a.created_at DESC";
+
+$attendance_records = $conn->query($query);
 
 // Get statistics
-$total_teachers = $teachers->num_rows;
-$teachers->data_seek(0);
+$today = date('Y-m-d');
+$total_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today'")->fetch_assoc()['count'];
+$present_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Present'")->fetch_assoc()['count'];
+$absent_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Absent'")->fetch_assoc()['count'];
+$late_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Late'")->fetch_assoc()['count'];
 
-$with_sections = $conn->query("
-    SELECT COUNT(DISTINCT u.id) as count 
-    FROM users u 
-    JOIN sections s ON u.id = s.adviser_id 
-    WHERE u.role = 'Teacher'
-")->fetch_assoc()['count'];
+// Get grade levels for filter
+$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
 
-$without_sections = $total_teachers - $with_sections;
+// Get subjects for filter
+$subjects = $conn->query("SELECT * FROM subjects ORDER BY subject_name");
+
+// Get sections for filter
+$sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_levels g ON s.grade_id = g.id ORDER BY g.id, s.section_name");
 ?>
 
 <!DOCTYPE html>
@@ -72,7 +99,7 @@ $without_sections = $total_teachers - $with_sections;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Teachers Management - Admin Dashboard</title>
+    <title>Attendance Management - Admin Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -234,46 +261,18 @@ $without_sections = $total_teachers - $with_sections;
         /* Header */
         .dashboard-header {
             margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }
 
-        .header-left h1 {
+        .dashboard-header h1 {
             font-size: 28px;
             color: var(--text-primary);
             margin-bottom: 10px;
             font-weight: 700;
         }
 
-        .header-left p {
+        .dashboard-header p {
             color: var(--text-secondary);
             font-size: 16px;
-        }
-
-        .back-btn {
-            background: white;
-            color: var(--text-primary);
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid var(--border-color);
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        }
-
-        .back-btn:hover {
-            border-color: #0B4F2E;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(11, 79, 46, 0.1);
-        }
-
-        .back-btn i {
-            color: #0B4F2E;
         }
 
         /* Welcome Card */
@@ -367,7 +366,7 @@ $without_sections = $total_teachers - $with_sections;
         /* Stats Cards */
         .stats-container {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 25px;
             margin-bottom: 30px;
         }
@@ -438,8 +437,8 @@ $without_sections = $total_teachers - $with_sections;
             font-size: 14px;
         }
 
-        /* Actions Bar */
-        .actions-bar {
+        /* Date Navigation */
+        .date-nav {
             background: white;
             border-radius: 15px;
             padding: 20px 25px;
@@ -452,75 +451,143 @@ $without_sections = $total_teachers - $with_sections;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .filter-group {
+        .date-display {
             display: flex;
             align-items: center;
             gap: 15px;
-            flex-wrap: wrap;
         }
 
-        .filter-select {
+        .date-display h3 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .date-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .date-input {
             padding: 10px 15px;
             border: 2px solid var(--border-color);
             border-radius: 10px;
             font-size: 14px;
-            min-width: 150px;
+            background: #f8f9fa;
+        }
+
+        .date-input:focus {
+            border-color: #0B4F2E;
+            outline: none;
+        }
+
+        .btn-date {
+            background: #0B4F2E;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 10px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-date:hover {
+            background: #1a7a42;
+        }
+
+        /* Filters Bar */
+        .filters-bar {
             background: white;
+            border-radius: 15px;
+            padding: 20px 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .filters-form {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
+        .filter-group {
+            flex: 1;
+            min-width: 150px;
+        }
+
+        .filter-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 14px;
+            background: #f8f9fa;
+            cursor: pointer;
         }
 
         .filter-select:focus {
             border-color: #0B4F2E;
             outline: none;
+            background: white;
         }
 
-        .btn-add {
+        .btn-filter {
             background: #0B4F2E;
             color: white;
             padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 600;
+            border-radius: 10px;
             border: none;
+            font-size: 14px;
+            font-weight: 600;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 45px;
         }
 
-        .btn-add:hover {
+        .btn-filter:hover {
             background: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
-        .btn-add i {
-            font-size: 16px;
-        }
-
-        .search-box {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: white;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            padding: 0 15px;
-        }
-
-        .search-box i {
+        .btn-reset {
+            background: #f8f9fa;
             color: var(--text-secondary);
-        }
-
-        .search-box input {
-            border: none;
-            padding: 12px 0;
-            width: 250px;
+            padding: 12px 25px;
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
             font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 45px;
         }
 
-        .search-box input:focus {
-            outline: none;
+        .btn-reset:hover {
+            border-color: #0B4F2E;
+            color: #0B4F2E;
         }
 
         /* Table Card */
@@ -557,12 +624,12 @@ $without_sections = $total_teachers - $with_sections;
             overflow-x: auto;
         }
 
-        .teachers-table {
+        .attendance-table {
             width: 100%;
             border-collapse: collapse;
         }
 
-        .teachers-table th {
+        .attendance-table th {
             text-align: left;
             padding: 15px;
             background: #f8f9fa;
@@ -573,51 +640,47 @@ $without_sections = $total_teachers - $with_sections;
             letter-spacing: 0.5px;
         }
 
-        .teachers-table td {
+        .attendance-table td {
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
         }
 
-        .teachers-table tbody tr:hover {
+        .attendance-table tbody tr:hover {
             background: var(--hover-color);
         }
 
-        .teacher-info {
+        .student-info {
             display: flex;
             align-items: center;
             gap: 12px;
         }
 
-        .teacher-avatar {
-            width: 45px;
-            height: 45px;
+        .student-avatar {
+            width: 40px;
+            height: 40px;
             background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 12px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 18px;
             font-weight: 600;
+            font-size: 16px;
         }
 
-        .teacher-details h4 {
-            font-size: 16px;
+        .student-details h4 {
+            font-size: 15px;
             margin-bottom: 3px;
             color: var(--text-primary);
         }
 
-        .teacher-details span {
-            font-size: 13px;
+        .student-details span {
+            font-size: 12px;
             color: var(--text-secondary);
             display: flex;
             align-items: center;
             gap: 5px;
-        }
-
-        .teacher-details span i {
-            font-size: 12px;
         }
 
         .badge {
@@ -628,29 +691,40 @@ $without_sections = $total_teachers - $with_sections;
             display: inline-block;
         }
 
-        .badge-success {
+        .badge-present {
             background: rgba(40, 167, 69, 0.1);
             color: #28a745;
         }
 
-        .badge-warning {
+        .badge-absent {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+
+        .badge-late {
             background: rgba(255, 193, 7, 0.1);
             color: #ffc107;
         }
 
-        .section-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 5px;
-        }
-
-        .section-tag {
+        .grade-tag {
             background: rgba(11, 79, 46, 0.1);
             color: #0B4F2E;
             padding: 3px 8px;
             border-radius: 12px;
             font-size: 11px;
             font-weight: 500;
+            display: inline-block;
+        }
+
+        .subject-tag {
+            background: rgba(76, 201, 240, 0.1);
+            color: #4cc9f0;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            display: inline-block;
+            margin-left: 5px;
         }
 
         .action-btns {
@@ -681,10 +755,6 @@ $without_sections = $total_teachers - $with_sections;
             color: #0B4F2E;
         }
 
-        .btn-edit:hover {
-            color: #007bff;
-        }
-
         .btn-delete:hover {
             color: #dc3545;
         }
@@ -704,32 +774,6 @@ $without_sections = $total_teachers - $with_sections;
         .no-data h3 {
             color: var(--text-primary);
             margin-bottom: 10px;
-        }
-
-        /* Pagination */
-        .pagination {
-            margin-top: 25px;
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-
-        .page-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
-            background: white;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .page-btn:hover,
-        .page-btn.active {
-            background: #0B4F2E;
-            color: white;
-            border-color: #0B4F2E;
         }
 
         /* Responsive */
@@ -785,34 +829,25 @@ $without_sections = $total_teachers - $with_sections;
                 grid-template-columns: 1fr;
             }
             
-            .actions-bar {
+            .date-nav {
                 flex-direction: column;
-                align-items: stretch;
+                align-items: flex-start;
+            }
+            
+            .filters-form {
+                flex-direction: column;
             }
             
             .filter-group {
-                flex-direction: column;
                 width: 100%;
             }
             
-            .filter-select {
-                width: 100%;
-            }
-            
-            .search-box {
-                width: 100%;
-            }
-            
-            .search-box input {
-                width: 100%;
-            }
-            
-            .btn-add {
+            .btn-filter, .btn-reset {
                 width: 100%;
                 justify-content: center;
             }
             
-            .teacher-info {
+            .student-info {
                 flex-direction: column;
                 text-align: center;
             }
@@ -829,7 +864,7 @@ $without_sections = $total_teachers - $with_sections;
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
+                <span>Donezo</span>
             </h2>
             
             <div class="admin-info">
@@ -845,7 +880,7 @@ $without_sections = $total_teachers - $with_sections;
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
-                    <li><a href="teachers.php" class="active"><i class="fas fa-chalkboard-teacher"></i> <span>Teachers</span></a></li>
+                    <li><a href="teachers.php"><i class="fas fa-chalkboard-teacher"></i> <span>Teachers</span></a></li>
                     <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="subjects.php"><i class="fas fa-book"></i> <span>Subjects</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
@@ -856,7 +891,7 @@ $without_sections = $total_teachers - $with_sections;
                 <h3>MANAGEMENT</h3>
                 <ul class="menu-items">
                     <li><a href="manage_accounts.php"><i class="fas fa-users-cog"></i> <span>Accounts</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance.php" class="active"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
                 </ul>
             </div>
 
@@ -873,13 +908,8 @@ $without_sections = $total_teachers - $with_sections;
         <div class="main-content">
             <!-- Header -->
             <div class="dashboard-header">
-                <div class="header-left">
-                    <h1>Teachers Management</h1>
-                    <p>Manage faculty members and their assignments</p>
-                </div>
-                <a href="dashboard.php" class="back-btn">
-                    <i class="fas fa-arrow-left"></i> Back to Dashboard
-                </a>
+                <h1>Attendance Management</h1>
+                <p>View and manage student attendance records</p>
             </div>
 
             <!-- Welcome Card -->
@@ -912,129 +942,184 @@ $without_sections = $total_teachers - $with_sections;
             <div class="stats-container">
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Total Teachers</h3>
+                        <h3>Today's Total</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-chalkboard-teacher"></i>
+                            <i class="fas fa-calendar-check"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $total_teachers; ?></div>
-                    <div class="stat-label">Faculty members</div>
+                    <div class="stat-number"><?php echo $total_today; ?></div>
+                    <div class="stat-label">Attendance records</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>With Sections</h3>
+                        <h3>Present</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-layer-group"></i>
+                            <i class="fas fa-user-check"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $with_sections; ?></div>
-                    <div class="stat-label">Class advisers</div>
+                    <div class="stat-number"><?php echo $present_today; ?></div>
+                    <div class="stat-label">Students present</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Without Sections</h3>
+                        <h3>Absent</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-user-clock"></i>
+                            <i class="fas fa-user-times"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $without_sections; ?></div>
-                    <div class="stat-label">Available teachers</div>
+                    <div class="stat-number"><?php echo $absent_today; ?></div>
+                    <div class="stat-label">Students absent</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Late</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $late_today; ?></div>
+                    <div class="stat-label">Students late</div>
                 </div>
             </div>
 
-            <!-- Actions Bar -->
-            <div class="actions-bar">
-                <div class="filter-group">
-                    <select class="filter-select" id="statusFilter">
-                        <option value="">All Teachers</option>
-                        <option value="with-sections">With Sections</option>
-                        <option value="without-sections">Without Sections</option>
-                    </select>
+            <!-- Date Navigation -->
+            <div class="date-nav">
+                <div class="date-display">
+                    <h3><i class="fas fa-calendar-alt"></i> Attendance Records</h3>
                 </div>
-
-                <div class="search-box">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="searchInput" placeholder="Search teachers...">
+                <div class="date-picker">
+                    <form method="GET" action="" style="display: flex; gap: 10px;">
+                        <input type="date" name="date" class="date-input" value="<?php echo $date_filter; ?>">
+                        <button type="submit" class="btn-date">
+                            <i class="fas fa-search"></i> View Date
+                        </button>
+                    </form>
                 </div>
-
-                <a href="add_teacher.php" class="btn-add">
-                    <i class="fas fa-plus-circle"></i> Add New Teacher
-                </a>
             </div>
 
-            <!-- Teachers Table -->
+            <!-- Filters Bar -->
+            <div class="filters-bar">
+                <form method="GET" action="" class="filters-form">
+                    <input type="hidden" name="date" value="<?php echo $date_filter; ?>">
+                    
+                    <div class="filter-group">
+                        <label>Grade Level</label>
+                        <select name="grade" class="filter-select">
+                            <option value="">All Grades</option>
+                            <?php 
+                            $grade_levels->data_seek(0);
+                            while($grade = $grade_levels->fetch_assoc()): 
+                            ?>
+                                <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
+                                    <?php echo $grade['grade_name']; ?>
+                                </option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label>Subject</label>
+                        <select name="subject" class="filter-select">
+                            <option value="">All Subjects</option>
+                            <?php 
+                            $subjects->data_seek(0);
+                            while($subject = $subjects->fetch_assoc()): 
+                            ?>
+                                <option value="<?php echo $subject['id']; ?>" <?php echo $subject_filter == $subject['id'] ? 'selected' : ''; ?>>
+                                    <?php echo $subject['subject_name']; ?>
+                                </option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+
+                    <div class="filter-group">
+                        <label>Status</label>
+                        <select name="status" class="filter-select">
+                            <option value="">All Status</option>
+                            <option value="Present" <?php echo $status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
+                            <option value="Absent" <?php echo $status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
+                            <option value="Late" <?php echo $status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group" style="flex: 0 0 auto;">
+                        <button type="submit" class="btn-filter">
+                            <i class="fas fa-filter"></i> Apply Filters
+                        </button>
+                    </div>
+
+                    <div class="filter-group" style="flex: 0 0 auto;">
+                        <a href="attendance.php" class="btn-reset">
+                            <i class="fas fa-redo-alt"></i> Reset
+                        </a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Attendance Table -->
             <div class="table-card">
                 <div class="table-header">
-                    <h3><i class="fas fa-chalkboard-teacher"></i> Faculty List</h3>
-                    <span class="badge badge-success">Total: <?php echo $total_teachers; ?> teachers</span>
+                    <h3><i class="fas fa-calendar-check"></i> Attendance Records</h3>
+                    <span class="grade-tag">Total: <?php echo $attendance_records ? $attendance_records->num_rows : 0; ?> records</span>
                 </div>
 
                 <div class="table-container">
-                    <table class="teachers-table" id="teachersTable">
+                    <table class="attendance-table">
                         <thead>
                             <tr>
-                                <th>Teacher</th>
-                                <th>Email</th>
+                                <th>Date</th>
+                                <th>Student</th>
                                 <th>ID Number</th>
-                                <th>Sections Advised</th>
+                                <th>Subject</th>
+                                <th>Grade</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($teachers && $teachers->num_rows > 0): ?>
-                                <?php while($teacher = $teachers->fetch_assoc()): ?>
+                            <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
+                                <?php while($record = $attendance_records->fetch_assoc()): ?>
                                     <tr>
                                         <td>
-                                            <div class="teacher-info">
-                                                <div class="teacher-avatar">
-                                                    <?php echo strtoupper(substr($teacher['fullname'], 0, 1)); ?>
+                                            <span class="activity-time">
+                                                <i class="far fa-calendar"></i>
+                                                <?php echo date('M d, Y', strtotime($record['date'])); ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <div class="student-info">
+                                                <div class="student-avatar">
+                                                    <?php echo strtoupper(substr($record['student_name'], 0, 1)); ?>
                                                 </div>
-                                                <div class="teacher-details">
-                                                    <h4><?php echo htmlspecialchars($teacher['fullname']); ?></h4>
-                                                    <span><i class="fas fa-calendar-alt"></i> Joined: <?php echo date('M d, Y', strtotime($teacher['created_at'])); ?></span>
+                                                <div class="student-details">
+                                                    <h4><?php echo htmlspecialchars($record['student_name']); ?></h4>
                                                 </div>
                                             </div>
                                         </td>
                                         <td>
-                                            <span><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($teacher['email']); ?></span>
+                                            <span class="grade-tag"><?php echo $record['student_id_number'] ?? 'N/A'; ?></span>
                                         </td>
                                         <td>
-                                            <span class="badge badge-warning"><?php echo $teacher['id_number'] ?? 'N/A'; ?></span>
+                                            <span class="subject-tag"><?php echo htmlspecialchars($record['subject_name']); ?></span>
                                         </td>
                                         <td>
-                                            <?php if($teacher['section_count'] > 0): ?>
-                                                <div class="section-tags">
-                                                    <?php 
-                                                    $sections = explode(', ', $teacher['sections']);
-                                                    foreach($sections as $section): 
-                                                    ?>
-                                                        <span class="section-tag"><?php echo htmlspecialchars($section); ?></span>
-                                                    <?php endforeach; ?>
-                                                </div>
-                                            <?php else: ?>
-                                                <span class="badge badge-warning">No sections assigned</span>
-                                            <?php endif; ?>
+                                            <span class="grade-tag"><?php echo htmlspecialchars($record['grade_name']); ?></span>
                                         </td>
                                         <td>
-                                            <?php if($teacher['section_count'] > 0): ?>
-                                                <span class="badge badge-success">Adviser</span>
-                                            <?php else: ?>
-                                                <span class="badge badge-warning">Available</span>
-                                            <?php endif; ?>
+                                            <span class="badge badge-<?php echo strtolower($record['status']); ?>">
+                                                <?php echo $record['status']; ?>
+                                            </span>
                                         </td>
                                         <td>
                                             <div class="action-btns">
-                                                <a href="view_teacher.php?id=<?php echo $teacher['id']; ?>" class="btn-icon btn-view" title="View Details">
+                                                <a href="view_attendance.php?id=<?php echo $record['id']; ?>" class="btn-icon btn-view" title="View Details">
                                                     <i class="fas fa-eye"></i>
                                                 </a>
-                                                <a href="edit_teacher.php?id=<?php echo $teacher['id']; ?>" class="btn-icon btn-edit" title="Edit">
-                                                    <i class="fas fa-edit"></i>
-                                                </a>
-                                                <a href="?delete=<?php echo $teacher['id']; ?>" class="btn-icon btn-delete" title="Delete" 
-                                                   onclick="return confirm('Are you sure you want to delete this teacher?')">
+                                                <a href="?delete=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                                   onclick="return confirm('Are you sure you want to delete this attendance record?')">
                                                     <i class="fas fa-trash"></i>
                                                 </a>
                                             </div>
@@ -1043,11 +1128,11 @@ $without_sections = $total_teachers - $with_sections;
                                 <?php endwhile; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="6">
+                                    <td colspan="7">
                                         <div class="no-data">
-                                            <i class="fas fa-chalkboard-teacher"></i>
-                                            <h3>No Teachers Found</h3>
-                                            <p>Click the "Add New Teacher" button to add your first teacher.</p>
+                                            <i class="fas fa-calendar-times"></i>
+                                            <h3>No Attendance Records Found</h3>
+                                            <p>Try adjusting your filters or select a different date.</p>
                                         </div>
                                     </td>
                                 </tr>
@@ -1055,54 +1140,11 @@ $without_sections = $total_teachers - $with_sections;
                         </tbody>
                     </table>
                 </div>
-
-                <!-- Pagination -->
-                <div class="pagination">
-                    <button class="page-btn active">1</button>
-                    <button class="page-btn">2</button>
-                    <button class="page-btn">3</button>
-                    <button class="page-btn">4</button>
-                    <button class="page-btn">5</button>
-                </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Search functionality
-        document.getElementById('searchInput').addEventListener('keyup', function() {
-            let searchValue = this.value.toLowerCase();
-            let tableRows = document.querySelectorAll('#teachersTable tbody tr');
-            
-            tableRows.forEach(row => {
-                if (row.style.display !== 'none') { // Only search visible rows
-                    let text = row.textContent.toLowerCase();
-                    row.style.display = text.includes(searchValue) ? '' : 'none';
-                }
-            });
-        });
-
-        // Filter by status
-        document.getElementById('statusFilter').addEventListener('change', function() {
-            let filterValue = this.value;
-            let tableRows = document.querySelectorAll('#teachersTable tbody tr');
-            
-            tableRows.forEach(row => {
-                if (filterValue === '') {
-                    row.style.display = '';
-                } else if (filterValue === 'with-sections') {
-                    let sectionsCell = row.cells[3].textContent;
-                    row.style.display = sectionsCell.includes('No sections') ? 'none' : '';
-                } else if (filterValue === 'without-sections') {
-                    let sectionsCell = row.cells[3].textContent;
-                    row.style.display = sectionsCell.includes('No sections') ? '' : 'none';
-                }
-            });
-            
-            // Trigger search to re-filter
-            document.getElementById('searchInput').dispatchEvent(new Event('keyup'));
-        });
-
         // Auto-hide alerts after 5 seconds
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');

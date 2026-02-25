@@ -24,59 +24,98 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get enrollment status
-$enrollment = $conn->query("SELECT e.*, g.grade_name 
-                           FROM enrollments e 
-                           LEFT JOIN grade_levels g ON e.grade_id = g.id 
-                           WHERE e.student_id = '$student_id' 
-                           ORDER BY e.id DESC LIMIT 1")->fetch_assoc();
-
-// Get recent activities
-$recent_activities = $conn->query("
-    SELECT 'enrollment' as type, status, id as reference_id, school_year as reference, created_at 
-    FROM enrollments 
-    WHERE student_id = '$student_id' 
-    ORDER BY id DESC 
-    LIMIT 5
-");
-
-// Get attendance statistics
-$attendance_stats = [
-    'present' => 0,
-    'absent' => 0,
-    'late' => 0,
-    'total' => 0
-];
-
-$attendance_query = "
-    SELECT status, COUNT(*) as count
-    FROM attendance
-    WHERE student_id = '$student_id'
-    GROUP BY status
+// Get student's enrollment information
+$enrollment_query = "
+    SELECT e.*, g.grade_name
+    FROM enrollments e
+    JOIN grade_levels g ON e.grade_id = g.id
+    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    ORDER BY e.created_at DESC LIMIT 1
 ";
-$attendance_result = $conn->query($attendance_query);
-if($attendance_result) {
-    while($row = $attendance_result->fetch_assoc()) {
-        $attendance_stats[strtolower($row['status'])] = $row['count'];
-        $attendance_stats['total'] += $row['count'];
+$stmt = $conn->prepare($enrollment_query);
+$stmt->bind_param("i", $student_id);
+$stmt->execute();
+$enrollment = $stmt->get_result()->fetch_assoc();
+$stmt->close();
+
+$grade_id = $enrollment ? $enrollment['grade_id'] : null;
+$grade_name = $enrollment ? $enrollment['grade_name'] : 'Not Enrolled';
+$strand = $enrollment ? ($enrollment['strand'] ?? 'N/A') : 'N/A';
+$school_year = $enrollment ? $enrollment['school_year'] : 'N/A';
+$enrollment_status = $enrollment ? $enrollment['status'] : 'Not Enrolled';
+
+// Get all subjects for student's grade level
+$subjects_list = [];
+if($grade_id) {
+    $subjects_query = "
+        SELECT * FROM subjects 
+        WHERE grade_id = ? 
+        ORDER BY subject_name
+    ";
+    $stmt = $conn->prepare($subjects_query);
+    $stmt->bind_param("i", $grade_id);
+    $stmt->execute();
+    $subjects = $stmt->get_result();
+    while($subject = $subjects->fetch_assoc()) {
+        $subjects_list[] = $subject;
     }
+    $stmt->close();
 }
 
-$attendance_rate = $attendance_stats['total'] > 0 
-    ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
-    : 0;
+// Since there's no grades table, we'll create sample data for demonstration
+// In a real application, you would have a grades table
+$has_grades = false; // Set to false since no grades table exists
 
-// Get subjects count
-$subjects_count = 0;
-if($enrollment && isset($enrollment['grade_id'])) {
-    $subjects_result = $conn->query("SELECT COUNT(*) as count FROM subjects WHERE grade_id = '{$enrollment['grade_id']}'");
-    if($subjects_result) {
-        $subjects_count = $subjects_result->fetch_assoc()['count'];
-    }
+// For demo purposes, you can uncomment this to show sample grades
+// $has_grades = true;
+// $sample_grades = [];
+// foreach($subjects_list as $index => $subject) {
+//     $sample_grades[$subject['id']] = [
+//         '1st Quarter' => rand(75, 95),
+//         '2nd Quarter' => rand(75, 95),
+//         '3rd Quarter' => rand(75, 95),
+//         '4th Quarter' => rand(75, 95)
+//     ];
+// }
+
+// Calculate statistics if grades exist
+$total_subjects = count($subjects_list);
+$overall_average = 0;
+$passing_count = 0;
+$failing_count = 0;
+
+// if($has_grades) {
+//     $total_grades = 0;
+//     $grade_count = 0;
+//     foreach($sample_grades as $subject_id => $quarters) {
+//         $subject_total = 0;
+//         foreach($quarters as $grade) {
+//             $subject_total += $grade;
+//             $total_grades += $grade;
+//             $grade_count++;
+//         }
+//         $subject_avg = $subject_total / 4;
+//         if($subject_avg >= 75) $passing_count++; else $failing_count++;
+//     }
+//     $overall_average = $grade_count > 0 ? round($total_grades / $grade_count, 2) : 0;
+// }
+
+// Define grading scale
+function getGradeColor($grade) {
+    if($grade >= 90) return '#28a745';
+    if($grade >= 80) return '#5cb85c';
+    if($grade >= 75) return '#f0ad4e';
+    return '#d9534f';
 }
 
-// FIXED: Removed the grades table query since it doesn't exist
-$average_grade = '--'; // Placeholder value
+function getGradeRemarks($grade) {
+    if($grade >= 90) return ['Excellent', '#28a745'];
+    if($grade >= 85) return ['Very Good', '#5cb85c'];
+    if($grade >= 80) return ['Good', '#5bc0de'];
+    if($grade >= 75) return ['Satisfactory', '#f0ad4e'];
+    if($grade >= 70) return ['Fair', '#f39c12'];
+    return ['Needs Improvement', '#d9534f'];
+}
 ?>
 
 <!DOCTYPE html>
@@ -84,7 +123,7 @@ $average_grade = '--'; // Placeholder value
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Student Dashboard - Placido L. Señor Senior High School</title>
+    <title>My Grades - Student Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -348,6 +387,61 @@ $average_grade = '--'; // Placeholder value
             font-size: 20px;
         }
 
+        /* Class Info Card */
+        .class-info-card {
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 20px;
+            padding: 25px;
+            color: white;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .class-info-details h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .class-info-details h3 i {
+            color: #FFD700;
+        }
+
+        .class-info-badges {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .info-badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .info-badge i {
+            color: #FFD700;
+        }
+
+        .school-year {
+            font-size: 18px;
+            font-weight: 600;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 30px;
+        }
+
         /* Stats Cards */
         .stats-container {
             display: grid;
@@ -364,7 +458,6 @@ $average_grade = '--'; // Placeholder value
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
-            cursor: pointer;
         }
 
         .stat-card:hover {
@@ -423,217 +516,148 @@ $average_grade = '--'; // Placeholder value
             font-size: 14px;
         }
 
-        /* Section Title */
-        .section-title {
-            margin: 30px 0 20px;
-        }
-
-        .section-title h2 {
-            color: var(--text-primary);
-            font-size: 20px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .section-title h2 i {
-            color: #0B4F2E;
-        }
-
-        /* Quick Actions Grid */
-        .actions-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 25px;
-            margin-bottom: 30px;
-        }
-
-        .action-card {
+        /* No Grades Card */
+        .no-grades-card {
             background: white;
             border-radius: 20px;
-            padding: 25px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            transition: all 0.3s;
+            padding: 60px;
             text-align: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-top: 30px;
         }
 
-        .action-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+        .no-grades-card i {
+            font-size: 80px;
+            color: #FFD700;
+            margin-bottom: 20px;
+            opacity: 0.5;
         }
 
-        .action-icon {
-            width: 70px;
-            height: 70px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-size: 30px;
-            margin: 0 auto 20px;
-        }
-
-        .action-card h3 {
+        .no-grades-card h3 {
             color: var(--text-primary);
-            font-size: 18px;
+            font-size: 24px;
             margin-bottom: 10px;
         }
 
-        .action-card p {
+        .no-grades-card p {
             color: var(--text-secondary);
-            font-size: 14px;
-            margin-bottom: 20px;
-            line-height: 1.5;
+            margin-bottom: 30px;
+            max-width: 500px;
+            margin-left: auto;
+            margin-right: auto;
         }
 
-        .action-btn {
-            display: inline-block;
-            padding: 10px 25px;
-            background: transparent;
+        .info-message {
+            background: #e8f4fd;
+            border-left: 4px solid #0B4F2E;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            text-align: left;
+        }
+
+        .info-message i {
+            font-size: 30px;
             color: #0B4F2E;
-            text-decoration: none;
-            border-radius: 30px;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s;
-            border: 2px solid #0B4F2E;
         }
 
-        .action-btn:hover {
-            background: #0B4F2E;
-            color: white;
+        .info-message p {
+            color: var(--text-primary);
+            font-size: 15px;
+            margin: 0;
         }
 
-        /* Activity Card */
-        .activity-card {
+        /* Subjects List */
+        .subjects-card {
             background: white;
             border-radius: 20px;
             padding: 25px;
+            margin-top: 30px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            margin-bottom: 30px;
         }
 
-        .activity-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .subjects-card h3 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
             margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
             padding-bottom: 15px;
             border-bottom: 1px solid var(--border-color);
         }
 
-        .activity-header h3 {
-            color: var(--text-primary);
-            font-size: 18px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .activity-header h3 i {
+        .subjects-card h3 i {
             color: #0B4F2E;
         }
 
-        .activity-list {
-            list-style: none;
+        .subjects-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
         }
 
-        .activity-item {
+        .subject-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
-            gap: 15px;
-            padding: 15px 0;
-            border-bottom: 1px solid var(--border-color);
+            gap: 12px;
+            transition: all 0.3s;
         }
 
-        .activity-item:last-child {
-            border-bottom: none;
+        .subject-item:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
         }
 
-        .activity-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
+        .subject-icon {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
         }
 
-        .dot-pending {
-            background: #ffc107;
-            box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.2);
-        }
-
-        .dot-approved {
-            background: #28a745;
-            box-shadow: 0 0 0 3px rgba(40, 167, 69, 0.2);
-        }
-
-        .dot-completed {
-            background: #6c757d;
-            box-shadow: 0 0 0 3px rgba(108, 117, 125, 0.2);
-        }
-
-        .activity-content {
+        .subject-info {
             flex: 1;
         }
 
-        .activity-title {
+        .subject-info h4 {
             color: var(--text-primary);
-            font-weight: 500;
-            margin-bottom: 5px;
+            font-size: 15px;
+            margin-bottom: 3px;
         }
 
-        .activity-time {
+        .subject-info p {
             color: var(--text-secondary);
             font-size: 12px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
         }
 
-        .activity-status {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-
-        .status-pending {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
-        }
-
-        .status-approved {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
-        }
-
-        .status-rejected {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-        }
-
-        /* School Info Footer */
-        .school-info {
+        .no-data {
             text-align: center;
-            margin-top: 40px;
-            padding: 25px;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-        }
-
-        .school-info p {
+            padding: 60px;
             color: var(--text-secondary);
-            font-size: 13px;
-            line-height: 1.8;
         }
 
-        .school-info i {
-            color: #0B4F2E;
-            margin: 0 5px;
+        .no-data i {
+            font-size: 60px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+
+        .no-data h3 {
+            color: var(--text-primary);
+            margin-bottom: 10px;
         }
 
         /* Responsive */
@@ -689,17 +713,14 @@ $average_grade = '--'; // Placeholder value
                 grid-template-columns: 1fr;
             }
             
-            .actions-grid {
-                grid-template-columns: 1fr;
+            .class-info-card {
+                flex-direction: column;
+                align-items: flex-start;
             }
             
-            .activity-item {
+            .info-message {
                 flex-direction: column;
                 text-align: center;
-            }
-            
-            .activity-status {
-                align-self: center;
             }
         }
     </style>
@@ -724,10 +745,10 @@ $average_grade = '--'; // Placeholder value
             <div class="menu-section">
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
-                    <li><a href="dashboard.php" class="active"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
+                    <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="profile.php"><i class="fas fa-user"></i> <span>My Profile</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-calendar-alt"></i> <span>Class Schedule</span></a></li>
-                    <li><a href="grades.php"><i class="fas fa-star"></i> <span>My Grades</span></a></li>
+                    <li><a href="grades.php" class="active"><i class="fas fa-star"></i> <span>My Grades</span></a></li>
                     <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
                 </ul>
             </div>
@@ -745,8 +766,8 @@ $average_grade = '--'; // Placeholder value
         <div class="main-content">
             <!-- Header -->
             <div class="dashboard-header">
-                <h1>Dashboard</h1>
-                <p>Welcome to your student dashboard. Manage your enrollment and track your progress.</p>
+                <h1>My Grades</h1>
+                <p>View your academic performance and grades</p>
             </div>
 
             <!-- Welcome Card -->
@@ -760,185 +781,140 @@ $average_grade = '--'; // Placeholder value
                 </a>
             </div>
 
-            <!-- Alert Messages -->
-            <?php if($success_message): ?>
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i>
-                    <?php echo $success_message; ?>
-                </div>
-            <?php endif; ?>
-
-            <?php if($error_message): ?>
-                <div class="alert alert-error">
-                    <i class="fas fa-exclamation-circle"></i>
-                    <?php echo $error_message; ?>
-                </div>
-            <?php endif; ?>
-
-            <!-- Statistics Cards -->
-            <div class="stats-container">
-                <div class="stat-card" onclick="window.location.href='enrollment.php'">
-                    <div class="stat-header">
-                        <h3>Enrollment Status</h3>
-                        <div class="stat-icon">
+            <?php if($enrollment): ?>
+                <!-- Class Info Card -->
+                <div class="class-info-card">
+                    <div class="class-info-details">
+                        <h3>
                             <i class="fas fa-graduation-cap"></i>
+                            <?php echo htmlspecialchars($grade_name); ?>
+                        </h3>
+                        <div class="class-info-badges">
+                            <?php if($strand != 'N/A'): ?>
+                                <span class="info-badge">
+                                    <i class="fas fa-tag"></i> Strand: <?php echo htmlspecialchars($strand); ?>
+                                </span>
+                            <?php endif; ?>
+                            <span class="info-badge">
+                                <i class="fas fa-check-circle"></i> Status: <?php echo htmlspecialchars($enrollment_status); ?>
+                            </span>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $enrollment ? htmlspecialchars($enrollment['grade_name']) : 'Not Enrolled'; ?></div>
-                    <div class="stat-label" style="color: <?php 
-                        if(!$enrollment) echo '#6c757d';
-                        else if($enrollment['status'] == 'Pending') echo '#ffc107';
-                        else if($enrollment['status'] == 'Enrolled') echo '#28a745';
-                        else echo '#dc3545';
-                    ?>;">
-                        <i class="fas fa-circle" style="font-size: 8px; margin-right: 5px;"></i>
-                        <?php echo $enrollment ? $enrollment['status'] : 'No Record'; ?>
+                    <div class="school-year">
+                        <i class="fas fa-calendar"></i> S.Y. <?php echo htmlspecialchars($school_year); ?>
                     </div>
                 </div>
-                
-                <div class="stat-card" onclick="window.location.href='subjects.php'">
-                    <div class="stat-header">
-                        <h3>Subjects</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-book"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $subjects_count; ?></div>
-                    <div class="stat-label">Current Subjects</div>
-                </div>
-                
-                <div class="stat-card" onclick="window.location.href='attendance.php'">
-                    <div class="stat-header">
-                        <h3>Attendance</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-calendar-check"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $attendance_rate; ?>%</div>
-                    <div class="stat-label">Overall Rate</div>
-                </div>
-                
-                <div class="stat-card" onclick="window.location.href='grades.php'">
-                    <div class="stat-header">
-                        <h3>Average Grade</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-star"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $average_grade; ?></div>
-                    <div class="stat-label">Overall Average</div>
-                </div>
-            </div>
 
-            <!-- Quick Actions -->
-            <div class="section-title">
-                <h2><i class="fas fa-bolt"></i> Quick Actions</h2>
-            </div>
-
-            <div class="actions-grid">
-                <div class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-graduation-cap"></i>
-                    </div>
-                    <h3>Enrollment</h3>
-                    <p><?php echo $enrollment ? 'Update your enrollment information' : 'Enroll now for the current school year'; ?></p>
-                    <a href="enrollment.php" class="action-btn">
-                        <?php echo $enrollment ? 'Update' : 'Enroll Now'; ?>
-                    </a>
-                </div>
-                
-                <div class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-calendar-alt"></i>
-                    </div>
-                    <h3>Class Schedule</h3>
-                    <p>View your weekly class schedule and subjects</p>
-                    <a href="schedule.php" class="action-btn">View Schedule</a>
-                </div>
-                
-                <div class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-star"></i>
-                    </div>
-                    <h3>My Grades</h3>
-                    <p>Check your grades and academic performance</p>
-                    <a href="grades.php" class="action-btn">View Grades</a>
-                </div>
-                
-                <div class="action-card">
-                    <div class="action-icon">
-                        <i class="fas fa-calendar-check"></i>
-                    </div>
-                    <h3>Attendance</h3>
-                    <p>View your attendance records and statistics</p>
-                    <a href="attendance.php" class="action-btn">View Attendance</a>
-                </div>
-            </div>
-
-            <!-- Recent Activity -->
-            <div class="section-title">
-                <h2><i class="fas fa-history"></i> Recent Enrollment Activity</h2>
-            </div>
-
-            <div class="activity-card">
-                <div class="activity-header">
-                    <h3><i class="fas fa-file-signature"></i> Enrollment History</h3>
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
-                        <span class="stat-label">Last 5 records</span>
-                    <?php endif; ?>
-                </div>
-                <div class="activity-list">
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
-                        <?php while($activity = $recent_activities->fetch_assoc()): ?>
-                            <div class="activity-item">
-                                <div class="activity-dot 
-                                    <?php 
-                                        if($activity['status'] == 'Pending') echo 'dot-pending';
-                                        else if($activity['status'] == 'Enrolled') echo 'dot-approved';
-                                        else echo 'dot-completed';
-                                    ?>">
-                                </div>
-                                <div class="activity-content">
-                                    <div class="activity-title">
-                                        Enrollment Request - <?php echo htmlspecialchars($activity['reference']); ?>
-                                    </div>
-                                    <div class="activity-time">
-                                        <i class="far fa-clock"></i>
-                                        School Year: <?php echo htmlspecialchars($activity['reference']); ?>
-                                    </div>
-                                </div>
-                                <div class="activity-status 
-                                    <?php 
-                                        if($activity['status'] == 'Pending') echo 'status-pending';
-                                        else if($activity['status'] == 'Enrolled') echo 'status-approved';
-                                        else echo 'status-rejected';
-                                    ?>">
-                                    <?php echo $activity['status']; ?>
-                                </div>
-                            </div>
-                        <?php endwhile; ?>
-                    <?php else: ?>
-                        <div class="activity-item">
-                            <div class="activity-content" style="text-align: center; padding: 30px;">
-                                <i class="fas fa-file-signature" style="font-size: 40px; color: var(--text-secondary); opacity: 0.3; margin-bottom: 10px;"></i>
-                                <p style="color: var(--text-secondary);">No enrollment history found.</p>
-                                <a href="enrollment.php" style="color: #0B4F2E; text-decoration: none; font-weight: 500; display: inline-block; margin-top: 10px;">
-                                    Enroll Now <i class="fas fa-arrow-right"></i>
-                                </a>
+                <!-- Statistics Cards -->
+                <div class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Enrollment Status</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-user-check"></i>
                             </div>
                         </div>
-                    <?php endif; ?>
-                </div>
-            </div>
+                        <div class="stat-number" style="font-size: 20px; color: #28a745;">
+                            <?php echo $enrollment_status; ?>
+                        </div>
+                        <div class="stat-label">Current Status</div>
+                    </div>
 
-            <!-- School Information -->
-            <div class="school-info">
-                <p>
-                    <i class="fas fa-map-marker-alt"></i> PLACIDO L. SEÑOR SENIOR HIGH SCHOOL<br>
-                    Langtad, City of Naga, Cebu 6037<br>
-                    <i class="fas fa-phone"></i> (032) 123-4567 · <i class="fas fa-envelope"></i> info@plsshs.edu.ph
-                </p>
-            </div>
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Grade Level</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-layer-group"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number" style="font-size: 24px;">
+                            <?php echo htmlspecialchars($grade_name); ?>
+                        </div>
+                        <div class="stat-label">Current Grade</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Subjects</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-book"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $total_subjects; ?></div>
+                        <div class="stat-label">Enrolled Subjects</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>School Year</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-calendar"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number" style="font-size: 20px;">
+                            <?php echo htmlspecialchars($school_year); ?>
+                        </div>
+                        <div class="stat-label">Current SY</div>
+                    </div>
+                </div>
+
+                <!-- No Grades Available Message -->
+                <div class="no-grades-card">
+                    <i class="fas fa-star"></i>
+                    <h3>No Grades Available Yet</h3>
+                    <p>Your grades have not been posted for this grading period. Please check back later or contact your subject teachers.</p>
+                    
+                    <div class="info-message">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <p><strong>Note:</strong> Grades are typically posted after each quarter. If you believe this is an error, please contact the registrar's office or your class adviser.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Your Subjects List -->
+                <div class="subjects-card">
+                    <h3><i class="fas fa-book-open"></i> Your Subjects (<?php echo $total_subjects; ?>)</h3>
+                    <div class="subjects-grid">
+                        <?php if(!empty($subjects_list)): ?>
+                            <?php foreach($subjects_list as $subject): ?>
+                                <div class="subject-item">
+                                    <div class="subject-icon">
+                                        <i class="fas fa-book"></i>
+                                    </div>
+                                    <div class="subject-info">
+                                        <h4><?php echo htmlspecialchars($subject['subject_name']); ?></h4>
+                                        <p>Subject ID: <?php echo $subject['id']; ?></p>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <div class="no-data" style="grid-column: 1/-1; padding: 30px;">
+                                <i class="fas fa-book"></i>
+                                <p>No subjects found for your grade level.</p>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
+            <?php else: ?>
+                <!-- No Enrollment Message -->
+                <div class="no-grades-card">
+                    <i class="fas fa-graduation-cap"></i>
+                    <h3>Not Enrolled</h3>
+                    <p>You are not currently enrolled in any grade level. Please contact the registrar's office for assistance.</p>
+                    
+                    <div class="info-message">
+                        <i class="fas fa-phone-alt"></i>
+                        <div>
+                            <p><strong>Registrar's Office</strong><br>
+                            📞 (032) 123-4567<br>
+                            📧 registrar@plshs.edu.ph<br>
+                            📍 Langtad, City of Naga, Cebu</p>
+                        </div>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
     </div>
 

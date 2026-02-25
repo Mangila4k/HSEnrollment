@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 25, 2026 at 06:17 AM
+-- Generation Time: Feb 25, 2026 at 11:56 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -35,6 +35,14 @@ CREATE TABLE `attendance` (
   `status` enum('Present','Absent','Late') DEFAULT NULL,
   `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `attendance`
+--
+
+INSERT INTO `attendance` (`id`, `student_id`, `subject_id`, `date`, `status`, `created_at`) VALUES
+(3, 2, 3, '2026-02-25', 'Absent', '2026-02-25 21:11:20'),
+(4, 2, 11, '2026-02-25', 'Late', '2026-02-25 22:53:44');
 
 -- --------------------------------------------------------
 
@@ -98,6 +106,15 @@ CREATE TABLE `sections` (
   `adviser_id` int(11) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `sections`
+--
+
+INSERT INTO `sections` (`id`, `section_name`, `grade_id`, `adviser_id`) VALUES
+(1, 'Narra', 6, 8),
+(2, 'Nangka', 4, 9),
+(3, 'Cino', 5, 9);
+
 -- --------------------------------------------------------
 
 --
@@ -120,6 +137,27 @@ CREATE TABLE `subjects` (
   `subject_name` varchar(100) DEFAULT NULL,
   `grade_id` int(11) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `subjects`
+--
+
+INSERT INTO `subjects` (`id`, `subject_name`, `grade_id`) VALUES
+(1, 'Mathematics', 1),
+(2, 'Filipino', 1),
+(3, 'English', 1),
+(4, 'Araling Panlipunan', 1),
+(5, 'Edukasyon sa Pagpapakatao', 1),
+(6, 'MAPEH', 1),
+(7, 'Science', 1),
+(8, 'Mathematics', 2),
+(9, 'Science', 2),
+(10, 'English', 2),
+(11, 'Filipino', 2),
+(12, 'Araling Panlipunan', 2),
+(13, 'MAPEH', 2),
+(14, 'Edukasyon sa Pagpapakatao', 2),
+(15, 'Technology and Livelihood Education', 2);
 
 -- --------------------------------------------------------
 
@@ -147,7 +185,10 @@ INSERT INTO `users` (`id`, `id_number`, `fullname`, `email`, `password`, `role`,
 (3, NULL, 'Jesriel', 'alegado@gmail.com', '$2y$10$NRl4dv4dZw.ENqvL4LRIM.EYJz4NCrFr5/zyfUN/iwTEm4k9aDO0K', 'Student', '2026-02-23 16:44:50'),
 (4, NULL, 'John Micole Mangila', 'micole@gmail.com', '123456789', 'Registrar', '2026-02-23 17:11:15'),
 (5, NULL, 'Registrar', 'registrar@gmail.com', '$2y$10$NRl4dv4dZw.ENqvL4LRIM.EYJz4NCrFr5/zyfUN/iwTEm4k9aDO0K', 'Registrar', '2026-02-23 18:15:15'),
-(6, NULL, 'Clyde Undang', 'undang@gmail.com', '$2y$10$ZN2zham67XphEjnMq9OKyOMuGv2Ssd9w.ucu6kGPhFK2Kt8hWAgFG', 'Student', '2026-02-25 05:08:16');
+(6, NULL, 'Clyde Undang', 'undang@gmail.com', '$2y$10$ZN2zham67XphEjnMq9OKyOMuGv2Ssd9w.ucu6kGPhFK2Kt8hWAgFG', 'Student', '2026-02-25 05:08:16'),
+(7, NULL, 'AdminKo', 'admin@gmail.com', '$2y$10$ZN2zham67XphEjnMq9OKyOMuGv2Ssd9w.ucu6kGPhFK2Kt8hWAgFG', 'Admin', '2026-02-25 17:31:12'),
+(8, NULL, 'Twengcle Deguma', 'deguma@gmail.com', '$2y$10$QNz6RxhiCB0d/BgNwi7uhOEbxZNBgo3VwLwmiZuDp0r3zGcjagqlq', 'Teacher', '2026-02-25 17:43:14'),
+(9, NULL, 'Ashly Balbon', 'ash@gmail.com', '$2y$10$mlaBuK5GfSISJMKwXnuqO.rjroCewFjw.KXTlJoR0afmdvHhaVt.i', 'Teacher', '2026-02-25 20:05:28');
 
 --
 -- Indexes for dumped tables
@@ -212,7 +253,7 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `attendance`
 --
 ALTER TABLE `attendance`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `enrollments`
@@ -230,7 +271,7 @@ ALTER TABLE `grade_levels`
 -- AUTO_INCREMENT for table `sections`
 --
 ALTER TABLE `sections`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `strands`
@@ -242,13 +283,13 @@ ALTER TABLE `strands`
 -- AUTO_INCREMENT for table `subjects`
 --
 ALTER TABLE `subjects`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=16;
 
 --
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- Constraints for dumped tables

@@ -2,14 +2,14 @@
 session_start();
 include("../config/database.php");
 
-// Check if user is student
-if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Student'){
+// Check if user is teacher
+if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Teacher'){
     header("Location: ../auth/login.php");
     exit();
 }
 
-$student_id = $_SESSION['user']['id'];
-$student_name = $_SESSION['user']['fullname'];
+$teacher_id = $_SESSION['user']['id'];
+$teacher_name = $_SESSION['user']['fullname'];
 $success_message = '';
 $error_message = '';
 
@@ -24,43 +24,28 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get student's enrollment information
-$enrollment_query = "
-    SELECT e.*, g.grade_name, s.section_name
-    FROM enrollments e
-    JOIN grade_levels g ON e.grade_id = g.id
-    LEFT JOIN sections s ON e.grade_id = s.grade_id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
-    ORDER BY e.created_at DESC LIMIT 1
+// Get teacher's sections (where they are adviser)
+$sections_query = "
+    SELECT s.*, g.grade_name
+    FROM sections s
+    JOIN grade_levels g ON s.grade_id = g.id
+    WHERE s.adviser_id = ?
+    ORDER BY g.id, s.section_name
 ";
-$stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt = $conn->prepare($sections_query);
+$stmt->bind_param("i", $teacher_id);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
+$sections = $stmt->get_result();
 $stmt->close();
 
-// Get student's section (if assigned)
-$section_id = $enrollment ? ($enrollment['section_id'] ?? null) : null;
-$grade_id = $enrollment ? $enrollment['grade_id'] : null;
-$grade_name = $enrollment ? $enrollment['grade_name'] : 'Not Enrolled';
-$section_name = $enrollment ? ($enrollment['section_name'] ?? 'Not Assigned') : 'Not Assigned';
-$strand = $enrollment ? ($enrollment['strand'] ?? 'N/A') : 'N/A';
-
-// Get subjects for student's grade level
+// Get teacher's subjects
 $subjects_query = "
-    SELECT * FROM subjects 
-    WHERE grade_id = ? 
-    ORDER BY subject_name
+    SELECT sub.*, g.grade_name
+    FROM subjects sub
+    JOIN grade_levels g ON sub.grade_id = g.id
+    ORDER BY g.id, sub.subject_name
 ";
-$stmt = $conn->prepare($subjects_query);
-$stmt->bind_param("i", $grade_id);
-$stmt->execute();
-$subjects = $stmt->get_result();
-$subjects_list = [];
-while($subject = $subjects->fetch_assoc()) {
-    $subjects_list[] = $subject;
-}
-$stmt->close();
+$subjects = $conn->query($subjects_query);
 
 // Days of the week
 $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
@@ -76,26 +61,34 @@ $time_slots = [
     '7' => '3:00 PM - 4:00 PM'
 ];
 
-// Generate sample schedule based on grade level and subjects
+// Sample schedule data - in a real application, this would come from a schedules table
+// For now, we'll create a sample schedule based on the teacher's sections and subjects
 $schedule = [];
-if($grade_id && !empty($subjects_list)) {
-    $subject_count = count($subjects_list);
+
+// Create a sample schedule
+if($sections && $sections->num_rows > 0) {
+    $sections->data_seek(0);
+    $section_index = 0;
     foreach($days as $day) {
         $schedule[$day] = [];
         foreach(array_keys($time_slots) as $slot) {
-            // Distribute subjects across the week
-            $subject_index = (array_search($day, $days) * 7 + $slot) % max(1, $subject_count);
-            if($subject_index < $subject_count) {
+            // Distribute sections across the week
+            if($section_index < $sections->num_rows) {
+                $sections->data_seek($section_index);
+                $section = $sections->fetch_assoc();
                 $schedule[$day][$slot] = [
-                    'subject' => $subjects_list[$subject_index]['subject_name'],
-                    'teacher' => 'Teacher ' . chr(65 + $subject_index), // Placeholder teacher names
-                    'room' => 'Room ' . (101 + $slot)
+                    'type' => 'advisory',
+                    'section_name' => $section['section_name'],
+                    'grade_name' => $section['grade_name'],
+                    'subject_name' => 'Advisory Class'
                 ];
+                $section_index = ($section_index + 1) % $sections->num_rows;
             } else {
                 $schedule[$day][$slot] = null;
             }
         }
     }
+    $sections->data_seek(0);
 }
 
 // Get current week dates
@@ -108,20 +101,6 @@ for($i = 0; $i < 5; $i++) {
     $date->modify("+$i days");
     $week_dates[$days[$i]] = $date->format('M d, Y');
 }
-
-// Calculate class statistics
-$total_classes = 0;
-$classes_per_day = [];
-foreach($days as $day) {
-    $count = 0;
-    if(isset($schedule[$day])) {
-        foreach($schedule[$day] as $slot) {
-            if($slot) $count++;
-        }
-    }
-    $classes_per_day[$day] = $count;
-    $total_classes += $count;
-}
 ?>
 
 <!DOCTYPE html>
@@ -129,7 +108,7 @@ foreach($days as $day) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Schedule - Student Dashboard</title>
+    <title>My Schedule - Teacher Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -197,14 +176,14 @@ foreach($days as $day) {
             color: #FFD700;
         }
 
-        .student-info {
+        .teacher-info {
             text-align: center;
             padding: 20px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
             margin-bottom: 20px;
         }
 
-        .student-avatar {
+        .teacher-avatar {
             width: 80px;
             height: 80px;
             background: #FFD700;
@@ -219,13 +198,13 @@ foreach($days as $day) {
             border: 3px solid white;
         }
 
-        .student-info h3 {
+        .teacher-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
             color: #FFD700;
         }
 
-        .student-info p {
+        .teacher-info p {
             font-size: 14px;
             opacity: 0.9;
         }
@@ -393,76 +372,78 @@ foreach($days as $day) {
             font-size: 20px;
         }
 
-        /* Class Info Card */
-        .class-info-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 25px;
-            color: white;
+        /* Stats Cards */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 25px;
             margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(135deg, rgba(11, 79, 46, 0.1) 0%, rgba(26, 122, 66, 0.1) 100%);
+            border-radius: 50%;
+            transform: translate(30px, -30px);
+        }
+
+        .stat-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            flex-wrap: wrap;
-            gap: 20px;
+            margin-bottom: 15px;
         }
 
-        .class-info-details {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .class-info-details h3 {
-            font-size: 20px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .class-info-details h3 i {
-            color: #FFD700;
-        }
-
-        .class-info-badges {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-
-        .info-badge {
-            background: rgba(255, 255, 255, 0.2);
-            padding: 8px 16px;
-            border-radius: 30px;
+        .stat-header h3 {
+            color: var(--text-secondary);
             font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-icon {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 12px;
             display: flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
         }
 
-        .info-badge i {
-            color: #FFD700;
-        }
-
-        .class-stats {
-            display: flex;
-            gap: 30px;
-        }
-
-        .stat {
-            text-align: center;
-        }
-
-        .stat .number {
+        .stat-number {
             font-size: 32px;
             font-weight: 700;
-            color: #FFD700;
+            color: var(--text-primary);
+            margin-bottom: 5px;
         }
 
-        .stat .label {
-            font-size: 12px;
-            opacity: 0.9;
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 14px;
         }
 
         /* Week Navigation */
@@ -523,66 +504,6 @@ foreach($days as $day) {
 
         .nav-btn i {
             font-size: 12px;
-        }
-
-        /* Today's Classes Card */
-        .today-card {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 30px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            display: flex;
-            align-items: center;
-            gap: 20px;
-            flex-wrap: wrap;
-        }
-
-        .today-icon {
-            width: 60px;
-            height: 60px;
-            background: rgba(11, 79, 46, 0.1);
-            border-radius: 15px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #0B4F2E;
-            font-size: 30px;
-        }
-
-        .today-info {
-            flex: 1;
-        }
-
-        .today-info h4 {
-            color: var(--text-primary);
-            font-size: 16px;
-            margin-bottom: 5px;
-        }
-
-        .today-classes {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-
-        .today-class-item {
-            background: #f8f9fa;
-            padding: 8px 15px;
-            border-radius: 30px;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .today-class-item i {
-            color: #0B4F2E;
-        }
-
-        .today-class-item .time {
-            color: var(--text-secondary);
-            font-size: 11px;
         }
 
         /* Schedule Container */
@@ -662,7 +583,7 @@ foreach($days as $day) {
             padding: 10px;
             border: 1px solid var(--border-color);
             vertical-align: top;
-            height: 120px;
+            height: 100px;
             width: 14%;
         }
 
@@ -684,15 +605,11 @@ foreach($days as $day) {
 
         .class-item {
             background: rgba(11, 79, 46, 0.1);
-            border-left: 4px solid #0B4F2E;
-            padding: 10px;
-            border-radius: 8px;
+            border-left: 3px solid #0B4F2E;
+            padding: 8px;
+            border-radius: 6px;
             font-size: 12px;
             transition: all 0.3s;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
         }
 
         .class-item:hover {
@@ -700,34 +617,27 @@ foreach($days as $day) {
             transform: translateX(2px);
         }
 
-        .class-item .subject-name {
-            font-weight: 700;
-            color: #0B4F2E;
-            margin-bottom: 5px;
-            font-size: 13px;
+        .class-item.advisory {
+            border-left-color: #FFD700;
         }
 
-        .class-item .teacher-name {
-            color: var(--text-secondary);
-            font-size: 11px;
-            display: flex;
-            align-items: center;
-            gap: 3px;
+        .class-item .class-name {
+            font-weight: 600;
+            color: var(--text-primary);
             margin-bottom: 3px;
         }
 
-        .class-item .room {
+        .class-item .class-details {
             color: var(--text-secondary);
             font-size: 11px;
             display: flex;
-            align-items: center;
-            gap: 3px;
+            flex-direction: column;
+            gap: 2px;
         }
 
-        .class-item i {
-            color: #FFD700;
-            font-size: 10px;
-            width: 14px;
+        .class-item .class-details i {
+            width: 12px;
+            color: #0B4F2E;
         }
 
         .empty-cell {
@@ -738,10 +648,6 @@ foreach($days as $day) {
             font-style: italic;
             background: #f8f9fa;
             border-radius: 6px;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
         }
 
         /* Legend */
@@ -764,21 +670,35 @@ foreach($days as $day) {
         .legend-color {
             width: 20px;
             height: 20px;
-            background: rgba(11, 79, 46, 0.1);
-            border-left: 4px solid #0B4F2E;
             border-radius: 4px;
         }
 
-        /* Subjects List */
-        .subjects-card {
+        .legend-color.advisory {
+            background: rgba(11, 79, 46, 0.1);
+            border-left: 3px solid #FFD700;
+        }
+
+        .legend-color.subject {
+            background: rgba(11, 79, 46, 0.1);
+            border-left: 3px solid #0B4F2E;
+        }
+
+        /* My Classes Sidebar */
+        .classes-sidebar {
+            margin-top: 30px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+        }
+
+        .class-list-card {
             background: white;
             border-radius: 15px;
             padding: 20px;
-            margin-top: 30px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .subjects-card h4 {
+        .class-list-card h4 {
             color: var(--text-primary);
             font-size: 16px;
             font-weight: 600;
@@ -790,60 +710,34 @@ foreach($days as $day) {
             border-bottom: 1px solid var(--border-color);
         }
 
-        .subjects-card h4 i {
+        .class-list-card h4 i {
             color: #0B4F2E;
         }
 
-        .subject-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-
-        .subject-tag {
+        .class-tag {
+            display: inline-block;
+            padding: 6px 12px;
             background: #f8f9fa;
-            padding: 8px 16px;
-            border-radius: 30px;
+            border-radius: 20px;
             font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+            margin: 0 5px 5px 0;
             border: 1px solid var(--border-color);
         }
 
-        .subject-tag i {
-            color: #0B4F2E;
+        .class-tag.advisory {
+            background: rgba(255, 215, 0, 0.1);
+            border-color: #FFD700;
+            color: #b8860b;
         }
 
-        .no-enrollment {
-            text-align: center;
-            padding: 60px;
-            background: white;
-            border-radius: 20px;
-            color: var(--text-secondary);
-        }
-
-        .no-enrollment i {
-            font-size: 60px;
-            margin-bottom: 20px;
-            opacity: 0.3;
-        }
-
-        .no-enrollment h3 {
-            color: var(--text-primary);
-            margin-bottom: 10px;
+        .class-tag i {
+            margin-right: 5px;
         }
 
         /* Responsive */
         @media (max-width: 1200px) {
-            .class-info-card {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            
-            .class-stats {
-                width: 100%;
-                justify-content: space-around;
+            .stats-container {
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -854,14 +748,14 @@ foreach($days as $day) {
             }
             
             .sidebar h2 span,
-            .student-info h3,
-            .student-info p,
+            .teacher-info h3,
+            .teacher-info p,
             .menu-section h3,
             .menu-items a span {
                 display: none;
             }
             
-            .student-avatar {
+            .teacher-avatar {
                 width: 50px;
                 height: 50px;
                 font-size: 20px;
@@ -889,13 +783,8 @@ foreach($days as $day) {
                 gap: 20px;
             }
             
-            .class-info-badges {
-                flex-direction: column;
-            }
-            
-            .class-stats {
-                flex-direction: column;
-                gap: 15px;
+            .stats-container {
+                grid-template-columns: 1fr;
             }
             
             .week-nav {
@@ -903,22 +792,17 @@ foreach($days as $day) {
                 align-items: flex-start;
             }
             
-            .today-card {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .today-classes {
-                justify-content: center;
+            .classes-sidebar {
+                grid-template-columns: 1fr;
             }
             
             .schedule-table td {
-                height: 100px;
+                height: 80px;
             }
             
             .class-item {
                 font-size: 10px;
-                padding: 6px;
+                padding: 4px;
             }
         }
     </style>
@@ -929,32 +813,32 @@ foreach($days as $day) {
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
+                <span>Donezo</span>
             </h2>
             
-            <div class="student-info">
-                <div class="student-avatar">
-                    <?php echo strtoupper(substr($student_name, 0, 1)); ?>
+            <div class="teacher-info">
+                <div class="teacher-avatar">
+                    <?php echo strtoupper(substr($teacher_name, 0, 1)); ?>
                 </div>
-                <h3><?php echo htmlspecialchars(explode(' ', $student_name)[0]); ?></h3>
-                <p><i class="fas fa-user-graduate"></i> Student</p>
+                <h3><?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?></h3>
+                <p><i class="fas fa-chalkboard-teacher"></i> Teacher</p>
             </div>
             
             <div class="menu-section">
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="profile.php"><i class="fas fa-user"></i> <span>My Profile</span></a></li>
-                    <li><a href="schedule.php" class="active"><i class="fas fa-calendar-alt"></i> <span>Class Schedule</span></a></li>
-                    <li><a href="grades.php"><i class="fas fa-star"></i> <span>My Grades</span></a></li>
                     <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
+                    <li><a href="schedule.php" class="active"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
+                    <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
                 </ul>
             </div>
 
             <div class="menu-section">
                 <h3>ACCOUNT</h3>
                 <ul class="menu-items">
-                    <li><a href="settings.php"><i class="fas fa-cog"></i> <span>Settings</span></a></li>
+                    <li><a href="profile.php"><i class="fas fa-user"></i> <span>Profile</span></a></li>
                     <li><a href="../auth/logout.php"><i class="fas fa-sign-out-alt"></i> <span>Logout</span></a></li>
                 </ul>
             </div>
@@ -964,14 +848,14 @@ foreach($days as $day) {
         <div class="main-content">
             <!-- Header -->
             <div class="dashboard-header">
-                <h1>My Class Schedule</h1>
-                <p>View your weekly class schedule and subjects</p>
+                <h1>My Schedule</h1>
+                <p>View your weekly class schedule</p>
             </div>
 
             <!-- Welcome Card -->
             <div class="welcome-card">
                 <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $student_name)[0]); ?>! 👋</h2>
+                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?>! 👋</h2>
                     <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
                 </div>
                 <a href="../auth/logout.php" class="logout-btn">
@@ -979,178 +863,178 @@ foreach($days as $day) {
                 </a>
             </div>
 
-            <?php if($enrollment): ?>
-                <!-- Class Info Card -->
-                <div class="class-info-card">
-                    <div class="class-info-details">
-                        <h3>
-                            <i class="fas fa-graduation-cap"></i>
-                            <?php echo htmlspecialchars($grade_name); ?>
-                        </h3>
-                        <div class="class-info-badges">
-                            <span class="info-badge">
-                                <i class="fas fa-layer-group"></i> Section: <?php echo htmlspecialchars($section_name); ?>
-                            </span>
-                            <?php if($strand != 'N/A'): ?>
-                                <span class="info-badge">
-                                    <i class="fas fa-tag"></i> Strand: <?php echo htmlspecialchars($strand); ?>
-                                </span>
-                            <?php endif; ?>
-                            <span class="info-badge">
-                                <i class="fas fa-book"></i> Subjects: <?php echo count($subjects_list); ?>
-                            </span>
+            <!-- Statistics -->
+            <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Teaching Hours</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
                         </div>
                     </div>
-                    <div class="class-stats">
-                        <div class="stat">
-                            <div class="number"><?php echo $total_classes; ?></div>
-                            <div class="label">Weekly Classes</div>
+                    <div class="stat-number">35</div>
+                    <div class="stat-label">Hours per week</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Classes</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-users"></i>
                         </div>
-                        <div class="stat">
-                            <div class="number"><?php echo count($subjects_list); ?></div>
-                            <div class="label">Subjects</div>
+                    </div>
+                    <div class="stat-number"><?php echo $sections ? $sections->num_rows : 0; ?></div>
+                    <div class="stat-label">Sections</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Subjects</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-book"></i>
                         </div>
+                    </div>
+                    <div class="stat-number"><?php echo $subjects ? $subjects->num_rows : 0; ?></div>
+                    <div class="stat-label">Subjects taught</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Free Periods</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-coffee"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number">8</div>
+                    <div class="stat-label">This week</div>
+                </div>
+            </div>
+
+            <!-- Week Navigation -->
+            <div class="week-nav">
+                <div class="week-display">
+                    <h3><i class="fas fa-calendar-week"></i> Week Schedule</h3>
+                    <span class="week-range">
+                        <?php echo $week_dates['Monday']; ?> - <?php echo $week_dates['Friday']; ?>
+                    </span>
+                </div>
+                <div class="nav-buttons">
+                    <a href="#" class="nav-btn">
+                        <i class="fas fa-chevron-left"></i> Previous Week
+                    </a>
+                    <a href="#" class="nav-btn">
+                        Next Week <i class="fas fa-chevron-right"></i>
+                    </a>
+                </div>
+            </div>
+
+            <!-- Schedule Container -->
+            <div class="schedule-container">
+                <div class="schedule-header">
+                    <h3><i class="fas fa-table"></i> Weekly Schedule</h3>
+                    <div class="view-options">
+                        <a href="#" class="view-btn active">Week</a>
+                        <a href="#" class="view-btn">Day</a>
+                        <a href="#" class="view-btn">Month</a>
                     </div>
                 </div>
 
-                <!-- Week Navigation -->
-                <div class="week-nav">
-                    <div class="week-display">
-                        <h3><i class="fas fa-calendar-week"></i> Week Schedule</h3>
-                        <span class="week-range">
-                            <?php echo $week_dates['Monday']; ?> - <?php echo $week_dates['Friday']; ?>
-                        </span>
-                    </div>
-                    <div class="nav-buttons">
-                        <a href="#" class="nav-btn">
-                            <i class="fas fa-chevron-left"></i> Previous Week
-                        </a>
-                        <a href="#" class="nav-btn">
-                            Next Week <i class="fas fa-chevron-right"></i>
-                        </a>
-                    </div>
-                </div>
-
-                <!-- Today's Classes -->
-                <div class="today-card">
-                    <div class="today-icon">
-                        <i class="fas fa-calendar-day"></i>
-                    </div>
-                    <div class="today-info">
-                        <h4>Today's Classes (<?php echo date('l'); ?>)</h4>
-                        <div class="today-classes">
-                            <?php 
-                            $today = date('l');
-                            $today_classes = 0;
-                            if(isset($schedule[$today])) {
-                                foreach($schedule[$today] as $slot_id => $class) {
-                                    if($class) {
-                                        $today_classes++;
-                                        echo '<span class="today-class-item">';
-                                        echo '<i class="fas fa-book-open"></i> ' . htmlspecialchars($class['subject']);
-                                        echo '<span class="time">' . $time_slots[$slot_id] . '</span>';
-                                        echo '</span>';
-                                    }
-                                }
-                            }
-                            if($today_classes == 0) {
-                                echo '<span class="today-class-item">No classes today</span>';
-                            }
-                            ?>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Schedule Container -->
-                <div class="schedule-container">
-                    <div class="schedule-header">
-                        <h3><i class="fas fa-table"></i> Weekly Schedule</h3>
-                        <div class="view-options">
-                            <a href="#" class="view-btn active">Week</a>
-                            <a href="#" class="view-btn">List</a>
-                        </div>
-                    </div>
-
-                    <!-- Schedule Table -->
-                    <table class="schedule-table">
-                        <thead>
+                <!-- Schedule Table -->
+                <table class="schedule-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <?php foreach($days as $day): ?>
+                                <th>
+                                    <?php echo $day; ?><br>
+                                    <span style="font-weight: normal; font-size: 11px; color: var(--text-secondary);">
+                                        <?php echo $week_dates[$day]; ?>
+                                    </span>
+                                </th>
+                            <?php endforeach; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach($time_slots as $slot_id => $time): ?>
                             <tr>
-                                <th>Time</th>
+                                <td class="time-column"><?php echo $time; ?></td>
                                 <?php foreach($days as $day): ?>
-                                    <th>
-                                        <?php echo $day; ?><br>
-                                        <span style="font-weight: normal; font-size: 11px; color: var(--text-secondary);">
-                                            <?php echo $week_dates[$day]; ?>
-                                        </span>
-                                    </th>
+                                    <td>
+                                        <div class="schedule-cell">
+                                            <?php if(isset($schedule[$day][$slot_id]) && $schedule[$day][$slot_id]): ?>
+                                                <?php $class = $schedule[$day][$slot_id]; ?>
+                                                <div class="class-item <?php echo $class['type']; ?>">
+                                                    <div class="class-name">
+                                                        <?php if($class['type'] == 'advisory'): ?>
+                                                            <i class="fas fa-star" style="color: #FFD700; font-size: 10px;"></i>
+                                                        <?php else: ?>
+                                                            <i class="fas fa-book" style="color: #0B4F2E; font-size: 10px;"></i>
+                                                        <?php endif; ?>
+                                                        <?php echo $class['section_name']; ?>
+                                                    </div>
+                                                    <div class="class-details">
+                                                        <span><i class="fas fa-layer-group"></i> <?php echo $class['grade_name']; ?></span>
+                                                        <span><i class="fas fa-book-open"></i> <?php echo $class['subject_name']; ?></span>
+                                                    </div>
+                                                </div>
+                                            <?php else: ?>
+                                                <div class="empty-cell">
+                                                    <i class="fas fa-minus"></i> No class
+                                                </div>
+                                            <?php endif; ?>
+                                        </div>
+                                    </td>
                                 <?php endforeach; ?>
                             </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach($time_slots as $slot_id => $time): ?>
-                                <tr>
-                                    <td class="time-column"><?php echo $time; ?></td>
-                                    <?php foreach($days as $day): ?>
-                                        <td>
-                                            <div class="schedule-cell">
-                                                <?php if(isset($schedule[$day][$slot_id]) && $schedule[$day][$slot_id]): ?>
-                                                    <?php $class = $schedule[$day][$slot_id]; ?>
-                                                    <div class="class-item">
-                                                        <div class="subject-name">
-                                                            <i class="fas fa-book"></i>
-                                                            <?php echo htmlspecialchars($class['subject']); ?>
-                                                        </div>
-                                                        <div class="teacher-name">
-                                                            <i class="fas fa-chalkboard-teacher"></i>
-                                                            <?php echo htmlspecialchars($class['teacher']); ?>
-                                                        </div>
-                                                        <div class="room">
-                                                            <i class="fas fa-door-open"></i>
-                                                            <?php echo htmlspecialchars($class['room']); ?>
-                                                        </div>
-                                                    </div>
-                                                <?php else: ?>
-                                                    <div class="empty-cell">
-                                                        <i class="fas fa-minus-circle"></i> No class
-                                                    </div>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
-                                    <?php endforeach; ?>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-
-                    <!-- Legend -->
-                    <div class="legend">
-                        <div class="legend-item">
-                            <div class="legend-color"></div>
-                            <span>Regular Class</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- My Subjects -->
-                <div class="subjects-card">
-                    <h4><i class="fas fa-book-open"></i> My Subjects (<?php echo count($subjects_list); ?>)</h4>
-                    <div class="subject-tags">
-                        <?php foreach($subjects_list as $subject): ?>
-                            <span class="subject-tag">
-                                <i class="fas fa-book"></i>
-                                <?php echo htmlspecialchars($subject['subject_name']); ?>
-                            </span>
                         <?php endforeach; ?>
+                    </tbody>
+                </table>
+
+                <!-- Legend -->
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-color advisory"></div>
+                        <span>Advisory Class</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-color subject"></div>
+                        <span>Subject Class</span>
                     </div>
                 </div>
-            <?php else: ?>
-                <!-- No Enrollment Message -->
-                <div class="no-enrollment">
-                    <i class="fas fa-calendar-times"></i>
-                    <h3>No Enrollment Found</h3>
-                    <p>You are not currently enrolled in any grade level. Please contact the registrar's office.</p>
+            </div>
+
+            <!-- My Classes Summary -->
+            <div class="classes-sidebar">
+                <!-- Advisory Classes -->
+                <div class="class-list-card">
+                    <h4><i class="fas fa-star" style="color: #FFD700;"></i> My Advisory Classes</h4>
+                    <?php if($sections && $sections->num_rows > 0): ?>
+                        <?php while($section = $sections->fetch_assoc()): ?>
+                            <span class="class-tag advisory">
+                                <i class="fas fa-users"></i>
+                                <?php echo htmlspecialchars($section['section_name'] . ' - ' . $section['grade_name']); ?>
+                            </span>
+                        <?php endwhile; ?>
+                    <?php else: ?>
+                        <p style="color: var(--text-secondary); font-size: 13px;">No advisory classes assigned</p>
+                    <?php endif; ?>
                 </div>
-            <?php endif; ?>
+
+                <!-- Subjects -->
+                <div class="class-list-card">
+                    <h4><i class="fas fa-book" style="color: #0B4F2E;"></i> My Subjects</h4>
+                    <?php if($subjects && $subjects->num_rows > 0): ?>
+                        <?php while($subject = $subjects->fetch_assoc()): ?>
+                            <span class="class-tag">
+                                <i class="fas fa-book-open"></i>
+                                <?php echo htmlspecialchars($subject['subject_name'] . ' - ' . $subject['grade_name']); ?>
+                            </span>
+                        <?php endwhile; ?>
+                    <?php else: ?>
+                        <p style="color: var(--text-secondary); font-size: 13px;">No subjects assigned</p>
+                    <?php endif; ?>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1174,7 +1058,7 @@ foreach($days as $day) {
                 viewBtns.forEach(b => b.classList.remove('active'));
                 this.classList.add('active');
                 
-                // Here you would change the view (week/list)
+                // Here you would change the view (week/day/month)
                 // For now, just UI feedback
             });
         });
