@@ -572,6 +572,10 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             background: var(--hover-color);
         }
 
+        .btn-schedule:hover {
+            color: #0B4F2E;
+        }
+
         .btn-edit:hover {
             color: #0B4F2E;
         }
@@ -1021,11 +1025,17 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                                         </td>
                                         <td>
                                             <div class="action-btns">
-                                                <a href="#" class="btn-icon btn-edit" onclick="openEditModal(<?php echo $sec['id']; ?>)">
+                                                <!-- Schedule Button - NEW -->
+                                                <a href="create_schedule.php?section_id=<?php echo $sec['id']; ?>" class="btn-icon btn-schedule" title="Manage Schedule">
+                                                    <i class="fas fa-calendar-alt"></i>
+                                                </a>
+                                                <!-- Edit Button -->
+                                                <a href="#" class="btn-icon btn-edit" onclick="openEditModal(<?php echo $sec['id']; ?>)" title="Edit Section">
                                                     <i class="fas fa-edit"></i>
                                                 </a>
+                                                <!-- Delete Button -->
                                                 <a href="?delete=<?php echo $sec['id']; ?>" class="btn-icon btn-delete" 
-                                                   onclick="return confirm('Are you sure you want to delete this section?')">
+                                                   onclick="return confirm('Are you sure you want to delete this section?')" title="Delete Section">
                                                     <i class="fas fa-trash"></i>
                                                 </a>
                                             </div>

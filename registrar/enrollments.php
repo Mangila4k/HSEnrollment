@@ -1501,5 +1501,8 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             newWindow.print();
         }
     </script>
+    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
+    <i class="fas fa-layer-group"></i><span>Sections</span>
+</a></li>
 </body>
 </html>

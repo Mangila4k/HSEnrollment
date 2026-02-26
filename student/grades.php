@@ -930,5 +930,6 @@ function getGradeRemarks($grade) {
             });
         }, 5000);
     </script>
+    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

@@ -1157,5 +1157,8 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
             newWindow.print();
         }
     </script>
+    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
+    <i class="fas fa-layer-group"></i><span>Sections</span>
+</a></li>
 </body>
 </html>

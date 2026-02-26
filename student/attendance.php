@@ -1393,5 +1393,6 @@ $month_names = [
             });
         }, 5000);
     </script>
+    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

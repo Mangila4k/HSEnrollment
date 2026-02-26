@@ -98,7 +98,7 @@ if($sections && $sections->num_rows > 0) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Classes - Teacher Dashboard</title>
+    <title>Placido L. Señor Senior High School</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -811,7 +811,7 @@ if($sections && $sections->num_rows > 0) {
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>Donezo</span>
+                <span>PNHS</span>
             </h2>
             
             <div class="teacher-info">
@@ -1133,5 +1133,6 @@ if($sections && $sections->num_rows > 0) {
             });
         }, 5000);
     </script>
+    <?php include('../includes/chatbot_widget_teacher.php'); ?>
 </body>
 </html>

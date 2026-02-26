@@ -2,13 +2,13 @@
 session_start();
 include("../config/database.php");
 
-// Check if user is registrar
-if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Registrar'){
+// Check if user is admin
+if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
     header("Location: ../auth/login.php");
     exit();
 }
 
-$registrar_name = $_SESSION['user']['fullname'];
+$admin_name = $_SESSION['user']['fullname'];
 
 // Check if ID is provided
 if(!isset($_GET['id']) || empty($_GET['id'])) {
@@ -78,6 +78,20 @@ $stmt->execute();
 $attendance = $stmt->get_result();
 $stmt->close();
 
+// Get available sections for this grade level (for potential assignment)
+$sections_query = "
+    SELECT s.*, g.grade_name
+    FROM sections s
+    LEFT JOIN grade_levels g ON s.grade_id = g.id
+    WHERE s.grade_id = ?
+    ORDER BY s.section_name
+";
+$stmt = $conn->prepare($sections_query);
+$stmt->bind_param("i", $enrollment['grade_id']);
+$stmt->execute();
+$sections = $stmt->get_result();
+$stmt->close();
+
 // Handle status update
 if(isset($_POST['update_status'])) {
     $new_status = $_POST['status'];
@@ -96,6 +110,22 @@ if(isset($_POST['update_status'])) {
     }
     $stmt->close();
 }
+
+// Handle section assignment
+if(isset($_POST['assign_section'])) {
+    $section_id = $_POST['section_id'];
+    
+    // You would need a section_id column in enrollments table for this to work
+    // For now, we'll just show a message
+    $_SESSION['success_message'] = "Section assignment feature coming soon!";
+    header("Location: view_enrollment.php?id=" . $enrollment_id);
+    exit();
+}
+
+// Calculate student statistics
+$student_id = $enrollment['student_id'];
+$total_attendance = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE student_id = '$student_id'")->fetch_assoc()['count'];
+$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE student_id = '$student_id'")->fetch_assoc()['count'];
 ?>
 
 <!DOCTYPE html>
@@ -103,7 +133,7 @@ if(isset($_POST['update_status'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Enrollment - Registrar Dashboard</title>
+    <title>View Enrollment - Admin Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -171,14 +201,14 @@ if(isset($_POST['update_status'])) {
             color: #FFD700;
         }
 
-        .registrar-info {
+        .admin-info {
             text-align: center;
             padding: 20px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
             margin-bottom: 20px;
         }
 
-        .registrar-avatar {
+        .admin-avatar {
             width: 80px;
             height: 80px;
             background: #FFD700;
@@ -193,13 +223,13 @@ if(isset($_POST['update_status'])) {
             border: 3px solid white;
         }
 
-        .registrar-info h3 {
+        .admin-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
             color: #FFD700;
         }
 
-        .registrar-info p {
+        .admin-info p {
             font-size: 14px;
             opacity: 0.9;
         }
@@ -422,6 +452,52 @@ if(isset($_POST['update_status'])) {
             border: 1px solid #dc3545;
         }
 
+        /* Enrollment Header Card */
+        .enrollment-header {
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 20px;
+            padding: 30px;
+            color: white;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .header-title h2 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-title h2 i {
+            color: #FFD700;
+        }
+
+        .header-meta {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .header-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px 16px;
+            border-radius: 30px;
+            font-size: 14px;
+        }
+
+        .header-meta-item i {
+            color: #FFD700;
+        }
+
         /* Detail Cards */
         .detail-card {
             background: white;
@@ -453,10 +529,61 @@ if(isset($_POST['update_status'])) {
             color: #0B4F2E;
         }
 
+        /* Student Info */
+        .student-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .student-avatar-large {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            font-weight: bold;
+            color: white;
+            border: 3px solid #FFD700;
+        }
+
+        .student-details {
+            flex: 1;
+        }
+
+        .student-details h3 {
+            font-size: 22px;
+            color: var(--text-primary);
+            margin-bottom: 5px;
+        }
+
+        .student-meta {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .student-meta i {
+            color: #0B4F2E;
+            margin-right: 5px;
+        }
+
+        /* Info Grid */
         .info-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 20px;
+            margin-top: 20px;
         }
 
         .info-item {
@@ -503,53 +630,31 @@ if(isset($_POST['update_status'])) {
             color: white;
         }
 
-        .document-link i {
-            font-size: 16px;
+        /* Stats Cards */
+        .stats-mini-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 20px;
         }
 
-        /* Student Avatar */
-        .student-avatar-large {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 15px;
-            font-size: 36px;
-            font-weight: bold;
-            color: white;
-            border: 3px solid #FFD700;
-        }
-
-        /* Student Info Card */
-        .student-info-card {
-            display: flex;
-            align-items: center;
-            gap: 25px;
-            padding: 20px;
+        .stat-mini-card {
             background: #f8f9fa;
-            border-radius: 15px;
-            margin-bottom: 20px;
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
         }
 
-        .student-details h2 {
+        .stat-mini-number {
             font-size: 24px;
-            color: var(--text-primary);
+            font-weight: 700;
+            color: #0B4F2E;
             margin-bottom: 5px;
         }
 
-        .student-meta {
-            display: flex;
-            gap: 20px;
+        .stat-mini-label {
+            font-size: 12px;
             color: var(--text-secondary);
-            font-size: 14px;
-        }
-
-        .student-meta i {
-            color: #0B4F2E;
-            margin-right: 5px;
         }
 
         /* Status Update Form */
@@ -637,13 +742,15 @@ if(isset($_POST['update_status'])) {
         }
 
         .history-table,
-        .attendance-table {
+        .attendance-table,
+        .sections-table {
             width: 100%;
             border-collapse: collapse;
         }
 
         .history-table th,
-        .attendance-table th {
+        .attendance-table th,
+        .sections-table th {
             text-align: left;
             padding: 12px;
             background: #f8f9fa;
@@ -656,7 +763,8 @@ if(isset($_POST['update_status'])) {
         }
 
         .history-table td,
-        .attendance-table td {
+        .attendance-table td,
+        .sections-table td {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
@@ -664,7 +772,8 @@ if(isset($_POST['update_status'])) {
         }
 
         .history-table tbody tr:hover,
-        .attendance-table tbody tr:hover {
+        .attendance-table tbody tr:hover,
+        .sections-table tbody tr:hover {
             background: var(--hover-color);
         }
 
@@ -674,6 +783,66 @@ if(isset($_POST['update_status'])) {
             font-size: 11px;
             font-weight: 600;
             display: inline-block;
+        }
+
+        .badge-pending {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+        }
+
+        .badge-enrolled {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+
+        .badge-rejected {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+
+        .badge-present {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+
+        .badge-absent {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+
+        .badge-late {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+        }
+
+        .view-link {
+            color: #0B4F2E;
+            text-decoration: none;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .view-link:hover {
+            text-decoration: underline;
+        }
+
+        .btn-assign {
+            background: #ffc107;
+            color: #2b2d42;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-assign:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
         }
 
         .no-data {
@@ -693,6 +862,27 @@ if(isset($_POST['update_status'])) {
             display: flex;
             gap: 10px;
             margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn-edit {
+            background: #0B4F2E;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+        }
+
+        .btn-edit:hover {
+            background: #1a7a42;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
         .btn-print {
@@ -721,6 +911,10 @@ if(isset($_POST['update_status'])) {
             .info-grid {
                 grid-template-columns: 1fr;
             }
+            
+            .stats-mini-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
 
         @media (max-width: 768px) {
@@ -730,14 +924,14 @@ if(isset($_POST['update_status'])) {
             }
             
             .sidebar h2 span,
-            .registrar-info h3,
-            .registrar-info p,
+            .admin-info h3,
+            .admin-info p,
             .menu-section h3,
             .menu-items a span {
                 display: none;
             }
             
-            .registrar-avatar {
+            .admin-avatar {
                 width: 50px;
                 height: 50px;
                 font-size: 20px;
@@ -765,14 +959,18 @@ if(isset($_POST['update_status'])) {
                 gap: 20px;
             }
             
-            .student-info-card {
+            .enrollment-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .student-info {
                 flex-direction: column;
                 text-align: center;
             }
             
             .student-meta {
-                flex-direction: column;
-                gap: 10px;
+                justify-content: center;
             }
             
             .status-form {
@@ -791,6 +989,10 @@ if(isset($_POST['update_status'])) {
             .action-buttons {
                 flex-direction: column;
             }
+            
+            .stats-mini-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -803,21 +1005,31 @@ if(isset($_POST['update_status'])) {
                 <span>PNHS</span>
             </h2>
             
-            <div class="registrar-info">
-                <div class="registrar-avatar">
-                    <?php echo strtoupper(substr($registrar_name, 0, 1)); ?>
+            <div class="admin-info">
+                <div class="admin-avatar">
+                    <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
                 </div>
-                <h3><?php echo htmlspecialchars(explode(' ', $registrar_name)[0]); ?></h3>
-                <p><i class="fas fa-user-tie"></i> Registrar</p>
+                <h3><?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?></h3>
+                <p><i class="fas fa-user-shield"></i> Administrator</p>
             </div>
             
             <div class="menu-section">
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="enrollments.php" class="active"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
-                    <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
+                    <li><a href="teachers.php"><i class="fas fa-chalkboard-teacher"></i> <span>Teachers</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
+                    <li><a href="subjects.php"><i class="fas fa-book"></i> <span>Subjects</span></a></li>
+                    <li><a href="enrollments.php" class="active"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
+                </ul>
+            </div>
+
+            <div class="menu-section">
+                <h3>MANAGEMENT</h3>
+                <ul class="menu-items">
+                    <li><a href="manage_accounts.php"><i class="fas fa-users-cog"></i> <span>Accounts</span></a></li>
+                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
                 </ul>
             </div>
 
@@ -846,7 +1058,7 @@ if(isset($_POST['update_status'])) {
             <!-- Welcome Card -->
             <div class="welcome-card">
                 <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $registrar_name)[0]); ?>! 👋</h2>
+                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?>! 👋</h2>
                     <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
                 </div>
                 <a href="../auth/logout.php" class="logout-btn">
@@ -869,27 +1081,69 @@ if(isset($_POST['update_status'])) {
                 </div>
             <?php endif; ?>
 
-            <!-- Student Information Card -->
+            <!-- Enrollment Header -->
+            <div class="enrollment-header">
+                <div class="header-title">
+                    <h2>
+                        <i class="fas fa-file-signature"></i>
+                        Enrollment #<?php echo $enrollment['id']; ?>
+                    </h2>
+                    <div class="header-meta">
+                        <span class="header-meta-item">
+                            <i class="fas fa-calendar"></i> Applied: <?php echo date('M d, Y', strtotime($enrollment['created_at'])); ?>
+                        </span>
+                        <span class="header-meta-item">
+                            <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($enrollment['created_at'])); ?>
+                        </span>
+                    </div>
+                </div>
+                <div class="status-badge status-<?php echo strtolower($enrollment['status']); ?>">
+                    <?php echo $enrollment['status']; ?>
+                </div>
+            </div>
+
+            <!-- Student Information -->
             <div class="detail-card">
                 <div class="card-header">
                     <h3><i class="fas fa-user-graduate"></i> Student Information</h3>
-                    <span class="status-badge status-<?php echo strtolower($enrollment['status']); ?>">
-                        <?php echo $enrollment['status']; ?>
-                    </span>
+                    <a href="view_student.php?id=<?php echo $enrollment['student_id']; ?>" class="view-link">
+                        View Full Profile <i class="fas fa-arrow-right"></i>
+                    </a>
                 </div>
 
-                <div class="student-info-card">
+                <div class="student-info">
                     <div class="student-avatar-large">
                         <?php echo strtoupper(substr($enrollment['fullname'], 0, 1)); ?>
                     </div>
-                    <div>
-                        <h2><?php echo htmlspecialchars($enrollment['fullname']); ?></h2>
+                    <div class="student-details">
+                        <h3><?php echo htmlspecialchars($enrollment['fullname']); ?></h3>
                         <div class="student-meta">
                             <span><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($enrollment['email']); ?></span>
                             <span><i class="fas fa-id-card"></i> ID: <?php echo $enrollment['id_number'] ?? 'Not assigned'; ?></span>
-                            <span><i class="fas fa-calendar-alt"></i> Registered: <?php echo date('M d, Y', strtotime($enrollment['student_created_at'])); ?></span>
                         </div>
                     </div>
+                </div>
+
+                <div class="stats-mini-grid">
+                    <div class="stat-mini-card">
+                        <div class="stat-mini-number"><?php echo $total_enrollments; ?></div>
+                        <div class="stat-mini-label">Total Enrollments</div>
+                    </div>
+                    <div class="stat-mini-card">
+                        <div class="stat-mini-number"><?php echo $total_attendance; ?></div>
+                        <div class="stat-mini-label">Attendance Records</div>
+                    </div>
+                    <div class="stat-mini-card">
+                        <div class="stat-mini-number"><?php echo date('Y', strtotime($enrollment['student_created_at'])); ?></div>
+                        <div class="stat-mini-label">Registered</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Enrollment Details -->
+            <div class="detail-card">
+                <div class="card-header">
+                    <h3><i class="fas fa-info-circle"></i> Enrollment Information</h3>
                 </div>
 
                 <div class="info-grid">
@@ -910,7 +1164,7 @@ if(isset($_POST['update_status'])) {
                     <div class="info-item">
                         <div class="info-label">School Year</div>
                         <div class="info-value">
-                            <i class="fas fa-calendar"></i>
+                            <i class="fas fa-calendar-alt"></i>
                             <?php echo htmlspecialchars($enrollment['school_year']); ?>
                         </div>
                     </div>
@@ -960,7 +1214,7 @@ if(isset($_POST['update_status'])) {
 
                 <!-- Action Buttons -->
                 <div class="action-buttons">
-                    <a href="edit_enrollment.php?id=<?php echo $enrollment['id']; ?>" class="btn-print">
+                    <a href="edit_enrollment.php?id=<?php echo $enrollment['id']; ?>" class="btn-edit">
                         <i class="fas fa-edit"></i> Edit Enrollment
                     </a>
                     <button onclick="window.print()" class="btn-print">
@@ -968,6 +1222,43 @@ if(isset($_POST['update_status'])) {
                     </button>
                 </div>
             </div>
+
+            <!-- Available Sections -->
+            <?php if($enrollment['status'] == 'Enrolled' && $sections && $sections->num_rows > 0): ?>
+            <div class="detail-card">
+                <div class="card-header">
+                    <h3><i class="fas fa-layer-group"></i> Available Sections</h3>
+                </div>
+
+                <div class="table-container">
+                    <table class="sections-table">
+                        <thead>
+                            <tr>
+                                <th>Section Name</th>
+                                <th>Grade Level</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php while($section = $sections->fetch_assoc()): ?>
+                                <tr>
+                                    <td><?php echo htmlspecialchars($section['section_name']); ?></td>
+                                    <td><?php echo htmlspecialchars($section['grade_name']); ?></td>
+                                    <td>
+                                        <form method="POST" style="display: inline;">
+                                            <input type="hidden" name="section_id" value="<?php echo $section['id']; ?>">
+                                            <button type="submit" name="assign_section" class="btn-assign">
+                                                Assign to Section
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            <?php endwhile; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <?php endif; ?>
 
             <!-- Enrollment History -->
             <div class="detail-card">
@@ -985,6 +1276,7 @@ if(isset($_POST['update_status'])) {
                                     <th>Strand</th>
                                     <th>Status</th>
                                     <th>Applied Date</th>
+                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -999,6 +1291,11 @@ if(isset($_POST['update_status'])) {
                                             </span>
                                         </td>
                                         <td><?php echo date('M d, Y', strtotime($row['created_at'])); ?></td>
+                                        <td>
+                                            <a href="view_enrollment.php?id=<?php echo $row['id']; ?>" class="view-link">
+                                                View <i class="fas fa-eye"></i>
+                                            </a>
+                                        </td>
                                     </tr>
                                 <?php endwhile; ?>
                             </tbody>
@@ -1016,6 +1313,9 @@ if(isset($_POST['update_status'])) {
             <div class="detail-card">
                 <div class="card-header">
                     <h3><i class="fas fa-calendar-check"></i> Recent Attendance</h3>
+                    <a href="attendance.php?student=<?php echo $enrollment['student_id']; ?>" class="view-link">
+                        View All <i class="fas fa-arrow-right"></i>
+                    </a>
                 </div>
 
                 <?php if($attendance && $attendance->num_rows > 0): ?>

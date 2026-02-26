@@ -1032,5 +1032,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             });
         }, 5000);
     </script>
+    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

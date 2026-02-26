@@ -52,44 +52,60 @@ $selected_section = isset($_GET['section_id']) ? $_GET['section_id'] : '';
 $selected_subject = isset($_GET['subject_id']) ? $_GET['subject_id'] : '';
 $selected_quarter = isset($_GET['quarter']) ? $_GET['quarter'] : '1st Quarter';
 
+// Check if grades table exists
+$grades_table_exists = false;
+$table_check = $conn->query("SHOW TABLES LIKE 'grades'");
+if($table_check && $table_check->num_rows > 0) {
+    $grades_table_exists = true;
+}
+
 // Get students for selected section
 $students_list = [];
 if($selected_section) {
     // Get grade_id from section
     $section_info = $conn->query("SELECT grade_id FROM sections WHERE id = '$selected_section'")->fetch_assoc();
-    $grade_id = $section_info['grade_id'];
-    
-    // Get enrolled students in this grade level
-    $students_query = $conn->query("
-        SELECT u.*, e.id as enrollment_id
-        FROM users u
-        JOIN enrollments e ON u.id = e.student_id
-        WHERE u.role = 'Student' 
-        AND e.grade_id = '$grade_id'
-        AND e.status = 'Enrolled'
-        ORDER BY u.fullname ASC
-    ");
-    
-    while($student = $students_query->fetch_assoc()) {
-        // Check if grade already exists for this student, subject, and quarter
-        $grade_check = $conn->query("
-            SELECT * FROM grades 
-            WHERE student_id = '{$student['id']}' 
-            AND subject_id = '$selected_subject'
-            AND quarter = '$selected_quarter'
+    if($section_info) {
+        $grade_id = $section_info['grade_id'];
+        
+        // Get enrolled students in this grade level
+        $students_query = $conn->query("
+            SELECT u.*, e.id as enrollment_id
+            FROM users u
+            JOIN enrollments e ON u.id = e.student_id
+            WHERE u.role = 'Student' 
+            AND e.grade_id = '$grade_id'
+            AND e.status = 'Enrolled'
+            ORDER BY u.fullname ASC
         ");
         
-        $student['grade_recorded'] = ($grade_check->num_rows > 0);
-        if($student['grade_recorded']) {
-            $student['grade'] = $grade_check->fetch_assoc();
+        if($students_query) {
+            while($student = $students_query->fetch_assoc()) {
+                // Check if grade already exists for this student, subject, and quarter
+                $student['grade_recorded'] = false;
+                $student['grade'] = null;
+                
+                if($grades_table_exists && $selected_subject) {
+                    $grade_check = $conn->query("
+                        SELECT * FROM grades 
+                        WHERE student_id = '{$student['id']}' 
+                        AND subject_id = '$selected_subject'
+                        AND quarter = '$selected_quarter'
+                    ");
+                    
+                    if($grade_check && $grade_check->num_rows > 0) {
+                        $student['grade_recorded'] = true;
+                        $student['grade'] = $grade_check->fetch_assoc();
+                    }
+                }
+                
+                $students_list[] = $student;
+            }
         }
-        
-        $students_list[] = $student;
     }
 }
 
 // Handle grade submission
-if(isset($_POST['save_grades'])) {
+if(isset($_POST['save_grades']) && $grades_table_exists) {
     $subject_id = $_POST['subject_id'];
     $section_id = $_POST['section_id'];
     $quarter = $_POST['quarter'];
@@ -122,7 +138,7 @@ if(isset($_POST['save_grades'])) {
                 AND quarter = '$quarter'
             ");
             
-            if($check->num_rows > 0) {
+            if($check && $check->num_rows > 0) {
                 // Update existing grade
                 $grade_id = $check->fetch_assoc()['id'];
                 $update = $conn->query("
@@ -133,8 +149,8 @@ if(isset($_POST['save_grades'])) {
             } else {
                 // Insert new grade
                 $insert = $conn->query("
-                    INSERT INTO grades (student_id, subject_id, quarter, grade, remarks)
-                    VALUES ('$student_id', '$subject_id', '$quarter', '$grade_value', '$remark')
+                    INSERT INTO grades (student_id, subject_id, quarter, grade, remarks, recorded_by)
+                    VALUES ('$student_id', '$subject_id', '$quarter', '$grade_value', '$remark', '$teacher_id')
                 ");
             }
         }
@@ -154,7 +170,7 @@ if(isset($_POST['save_grades'])) {
 
 // Get grade statistics if subject and section are selected
 $statistics = [];
-if($selected_subject && $selected_section && !empty($students_list)) {
+if($selected_subject && $selected_section && !empty($students_list) && $grades_table_exists) {
     $grade_values = [];
     foreach($students_list as $student) {
         if(isset($student['grade']['grade'])) {
@@ -181,7 +197,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Grade Management - Teacher Dashboard</title>
+    <title>Placido L. Señor Senior High School</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -194,18 +210,17 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
         }
 
         body {
@@ -223,7 +238,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         /* Sidebar */
         .sidebar {
             width: 280px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             padding: 30px 20px;
             position: fixed;
@@ -240,13 +255,12 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             gap: 10px;
             color: #fff;
             font-weight: 700;
-            letter-spacing: 1px;
             padding-bottom: 20px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.2);
         }
 
         .sidebar h2 i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .teacher-info {
@@ -259,7 +273,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .teacher-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
+            background: var(--accent);
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -267,14 +281,14 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             margin: 0 auto 15px;
             font-size: 32px;
             font-weight: bold;
-            color: #0B4F2E;
+            color: var(--primary);
             border: 3px solid white;
         }
 
         .teacher-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .teacher-info p {
@@ -325,12 +339,12 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .menu-items a i {
             width: 20px;
             font-size: 1.1em;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .menu-items a.active {
             background: rgba(255, 255, 255, 0.15);
-            border-left: 3px solid #FFD700;
+            border-left: 3px solid var(--accent);
         }
 
         /* Main Content */
@@ -359,7 +373,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 
         /* Welcome Card */
         .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 20px;
             padding: 30px;
             color: white;
@@ -385,7 +399,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .welcome-text p i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .logout-btn {
@@ -432,13 +446,13 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
@@ -498,7 +512,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .stat-icon {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -539,7 +553,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .filter-card h3 i {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .filter-grid {
@@ -575,13 +589,13 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 
         .filter-group select:focus,
         .filter-group input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             outline: none;
-            box-shadow: 0 0 0 3px rgba(11, 79, 46, 0.1);
+            box-shadow: 0 0 0 3px var(--primary-light);
         }
 
         .btn-filter {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             border: none;
             padding: 12px 25px;
@@ -598,14 +612,14 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .btn-filter:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
         /* Statistics Panel */
         .stats-panel {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 15px;
             padding: 25px;
             margin-bottom: 30px;
@@ -626,7 +640,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             font-size: 24px;
             font-weight: 700;
             margin-bottom: 5px;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .stat-item .stat-label {
@@ -661,7 +675,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .grade-header h3 i {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .batch-actions {
@@ -684,21 +698,21 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 
         .btn-pass {
             background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
+            color: var(--success);
         }
 
         .btn-pass:hover {
-            background: #28a745;
+            background: var(--success);
             color: white;
         }
 
         .btn-fail {
             background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .btn-fail:hover {
-            background: #dc3545;
+            background: var(--danger);
             color: white;
         }
 
@@ -741,7 +755,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .student-avatar {
             width: 40px;
             height: 40px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 10px;
             display: flex;
             align-items: center;
@@ -773,18 +787,18 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .grade-input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             outline: none;
-            box-shadow: 0 0 0 3px rgba(11, 79, 46, 0.1);
+            box-shadow: 0 0 0 3px var(--primary-light);
         }
 
         .grade-input.passing {
-            border-color: #28a745;
+            border-color: var(--success);
             background: rgba(40, 167, 69, 0.05);
         }
 
         .grade-input.failing {
-            border-color: #dc3545;
+            border-color: var(--danger);
             background: rgba(220, 53, 69, 0.05);
         }
 
@@ -798,7 +812,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .remarks-input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             outline: none;
         }
 
@@ -812,16 +826,16 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 
         .grade-badge.passing {
             background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
+            color: var(--success);
         }
 
         .grade-badge.failing {
             background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .btn-save {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             border: none;
             padding: 14px 30px;
@@ -839,7 +853,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .btn-save:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -868,10 +882,23 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             margin-bottom: 10px;
         }
 
+        .warning-message {
+            background: #fff3cd;
+            color: #856404;
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid #ffc107;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
         /* Responsive */
         @media (max-width: 1200px) {
+            .stats-container,
             .stats-panel {
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -944,7 +971,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>Donezo</span>
+                <span>PNHS</span>
             </h2>
             
             <div class="teacher-info">
@@ -1016,6 +1043,13 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                 </div>
             <?php endif; ?>
 
+            <?php if(!$grades_table_exists && $selected_section && $selected_subject): ?>
+                <div class="warning-message">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>Note:</strong> The grades table doesn't exist yet. Please run the SQL script to create the grades table. You can still enter grades, but they won't be saved until the table is created.
+                </div>
+            <?php endif; ?>
+
             <!-- Quick Stats -->
             <div class="stats-container">
                 <div class="stat-card">
@@ -1062,7 +1096,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                         <?php 
                         $graded = 0;
                         foreach($students_list as $s) {
-                            if($s['grade_recorded']) $graded++;
+                            if(isset($s['grade_recorded']) && $s['grade_recorded']) $graded++;
                         }
                         echo $graded;
                         ?>
@@ -1186,7 +1220,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                                 <thead>
                                     <tr>
                                         <th>Student</th>
-                                        <th>ID Number</th>
                                         <th>Grade</th>
                                         <th>Remarks</th>
                                     </tr>
@@ -1203,11 +1236,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                                                         <h4><?php echo htmlspecialchars($student['fullname']); ?></h4>
                                                     </div>
                                                 </div>
-                                            </td>
-                                            <td>
-                                                <span style="color: var(--text-secondary); font-size: 13px;">
-                                                    <?php echo $student['id_number'] ?? 'N/A'; ?>
-                                                </span>
                                             </td>
                                             <td>
                                                 <input type="hidden" name="student_ids[]" value="<?php echo $student['id']; ?>">
@@ -1238,9 +1266,15 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                             </table>
                         </div>
 
-                        <button type="submit" name="save_grades" class="btn-save">
-                            <i class="fas fa-save"></i> Save Grades
-                        </button>
+                        <?php if($grades_table_exists): ?>
+                            <button type="submit" name="save_grades" class="btn-save">
+                                <i class="fas fa-save"></i> Save Grades
+                            </button>
+                        <?php else: ?>
+                            <button type="button" class="btn-save" style="background: #ccc;" disabled>
+                                <i class="fas fa-exclamation-triangle"></i> Grades Table Not Created Yet
+                            </button>
+                        <?php endif; ?>
                     </form>
                 </div>
             <?php elseif($selected_section && $selected_subject): ?>
@@ -1321,5 +1355,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             }
         });
     </script>
+    <?php include('../includes/chatbot_widget_teacher.php'); ?>
 </body>
 </html>

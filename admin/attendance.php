@@ -864,7 +864,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>Donezo</span>
+                <span>PNHS</span>
             </h2>
             
             <div class="admin-info">

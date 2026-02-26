@@ -1250,5 +1250,9 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
             });
         }, 5000);
     </script>
+    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
+    <i class="fas fa-layer-group"></i><span>Sections</span>
+</a></li>
+<li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
 </body>
 </html>
