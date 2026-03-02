@@ -173,9 +173,9 @@ if($table_check && $table_check->num_rows > 0) {
         $attendance_query = "
             SELECT 
                 COUNT(*) as total,
-                SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) as present,
-                SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) as absent,
-                SUM(CASE WHEN status = 'Late' THEN 1 ELSE 0 END) as late
+                SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) as present,
+                SUM(CASE WHEN a.status = 'Absent' THEN 1 ELSE 0 END) as absent,
+                SUM(CASE WHEN a.status = 'Late' THEN 1 ELSE 0 END) as late
             FROM attendance a
             JOIN users u ON a.student_id = u.id
             JOIN enrollments e ON u.id = e.student_id
@@ -1052,17 +1052,6 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 </div>
                 <a href="classes.php" class="back-btn">
                     <i class="fas fa-arrow-left"></i> Back to Classes
-                </a>
-            </div>
-
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
                 </a>
             </div>
 

@@ -693,16 +693,6 @@ $recent_attendance = $conn->query("
                 <p>Manage your classes, attendance, and student progress</p>
             </div>
 
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Hi Cher, <?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
-                </a>
-            </div>
 
             <!-- Statistics -->
             <div class="stats-container">

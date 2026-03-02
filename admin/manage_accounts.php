@@ -859,17 +859,6 @@ $total_users = array_sum($counts);
                 <p>Manage user accounts and roles in the system</p>
             </div>
 
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
-                </a>
-            </div>
-
             <!-- Quick Stats -->
             <div class="stats-container">
                 <div class="stat-card">

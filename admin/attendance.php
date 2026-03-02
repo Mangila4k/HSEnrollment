@@ -23,7 +23,7 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Handle delete action
+// Handle delete action for student attendance
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     $delete = $conn->query("DELETE FROM attendance WHERE id = '$delete_id'");
@@ -34,14 +34,30 @@ if(isset($_GET['delete'])) {
     }
 }
 
-// Get filter parameters
+// Handle delete action for teacher attendance
+if(isset($_GET['delete_teacher'])) {
+    $delete_id = $_GET['delete_teacher'];
+    $delete = $conn->query("DELETE FROM teacher_attendance WHERE id = '$delete_id'");
+    if($delete) {
+        $success_message = "Teacher attendance record deleted successfully!";
+    } else {
+        $error_message = "Error deleting teacher attendance record.";
+    }
+}
+
+// Get filter parameters for student attendance
 $date_filter = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
 $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $section_filter = isset($_GET['section']) ? $_GET['section'] : '';
 $subject_filter = isset($_GET['subject']) ? $_GET['subject'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 
-// Build the query
+// Get filter parameters for teacher attendance
+$teacher_date_filter = isset($_GET['teacher_date']) ? $_GET['teacher_date'] : date('Y-m-d');
+$teacher_status_filter = isset($_GET['teacher_status']) ? $_GET['teacher_status'] : '';
+$teacher_department_filter = isset($_GET['department']) ? $_GET['department'] : '';
+
+// Build the student attendance query
 $query = "
     SELECT a.*, 
            u.fullname as student_name,
@@ -77,12 +93,41 @@ $query .= " ORDER BY a.date DESC, a.created_at DESC";
 
 $attendance_records = $conn->query($query);
 
-// Get statistics
+// Build the teacher attendance query
+$teacher_query = "
+    SELECT ta.*, 
+           u.fullname as teacher_name,
+           u.id_number as teacher_id_number,
+           u.email as teacher_email
+    FROM teacher_attendance ta
+    JOIN users u ON ta.teacher_id = u.id
+    WHERE u.role = 'Teacher'
+";
+
+if(!empty($teacher_date_filter)) {
+    $teacher_query .= " AND ta.date = '$teacher_date_filter'";
+}
+
+if(!empty($teacher_status_filter)) {
+    $teacher_query .= " AND ta.status = '$teacher_status_filter'";
+}
+
+$teacher_query .= " ORDER BY ta.date DESC, ta.created_at DESC";
+
+$teacher_attendance_records = $conn->query($teacher_query);
+
+// Get student attendance statistics
 $today = date('Y-m-d');
 $total_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today'")->fetch_assoc()['count'];
 $present_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Present'")->fetch_assoc()['count'];
 $absent_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Absent'")->fetch_assoc()['count'];
 $late_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Late'")->fetch_assoc()['count'];
+
+// Get teacher attendance statistics
+$teacher_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today'")->fetch_assoc()['count'] ?? 0;
+$teacher_present_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Present'")->fetch_assoc()['count'] ?? 0;
+$teacher_absent_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Absent'")->fetch_assoc()['count'] ?? 0;
+$teacher_late_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Late'")->fetch_assoc()['count'] ?? 0;
 
 // Get grade levels for filter
 $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
@@ -92,6 +137,33 @@ $subjects = $conn->query("SELECT * FROM subjects ORDER BY subject_name");
 
 // Get sections for filter
 $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_levels g ON s.grade_id = g.id ORDER BY g.id, s.section_name");
+
+// Get teachers for filter
+$teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+
+// Check if teacher_attendance table exists, if not create it
+$table_check = $conn->query("SHOW TABLES LIKE 'teacher_attendance'");
+if($table_check->num_rows == 0) {
+    $create_table = "
+        CREATE TABLE IF NOT EXISTS `teacher_attendance` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `teacher_id` int(11) NOT NULL,
+            `date` date NOT NULL,
+            `time_in` time DEFAULT NULL,
+            `time_out` time DEFAULT NULL,
+            `status` enum('Present','Absent','Late') NOT NULL,
+            `remarks` text DEFAULT NULL,
+            `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+            PRIMARY KEY (`id`),
+            KEY `teacher_id` (`teacher_id`),
+            CONSTRAINT `teacher_attendance_ibfk_1` FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+    ";
+    $conn->query($create_table);
+}
+
+// Get active tab
+$active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
 ?>
 
 <!DOCTYPE html>
@@ -112,18 +184,17 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
         }
 
         body {
@@ -141,7 +212,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         /* Sidebar */
         .sidebar {
             width: 280px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             padding: 30px 20px;
             position: fixed;
@@ -164,7 +235,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .sidebar h2 i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info {
@@ -177,7 +248,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
+            background: var(--accent);
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -185,14 +256,14 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             margin: 0 auto 15px;
             font-size: 32px;
             font-weight: bold;
-            color: #0B4F2E;
+            color: var(--primary);
             border: 3px solid white;
         }
 
         .admin-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info p {
@@ -243,12 +314,12 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         .menu-items a i {
             width: 20px;
             font-size: 1.1em;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .menu-items a.active {
             background: rgba(255, 255, 255, 0.15);
-            border-left: 3px solid #FFD700;
+            border-left: 3px solid var(--accent);
         }
 
         /* Main Content */
@@ -277,7 +348,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
 
         /* Welcome Card */
         .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 20px;
             padding: 30px;
             color: white;
@@ -303,7 +374,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .welcome-text p i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .logout-btn {
@@ -350,17 +421,59 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
             font-size: 20px;
+        }
+
+        /* Tab Navigation */
+        .tab-nav {
+            background: white;
+            border-radius: 15px;
+            padding: 5px;
+            margin-bottom: 30px;
+            display: flex;
+            gap: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 15px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: transparent;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .tab-btn i {
+            font-size: 18px;
+        }
+
+        .tab-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .tab-btn:hover:not(.active) {
+            background: var(--hover-color);
+            color: var(--primary);
         }
 
         /* Stats Cards */
@@ -416,7 +529,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         .stat-icon {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -478,12 +591,12 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .date-input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             outline: none;
         }
 
         .btn-date {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             padding: 10px 20px;
             border-radius: 10px;
@@ -498,7 +611,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .btn-date:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
         }
 
         /* Filters Bar */
@@ -532,7 +645,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             letter-spacing: 0.5px;
         }
 
-        .filter-select {
+        .filter-select, .filter-input {
             width: 100%;
             padding: 12px 15px;
             border: 2px solid var(--border-color);
@@ -542,14 +655,14 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             cursor: pointer;
         }
 
-        .filter-select:focus {
-            border-color: #0B4F2E;
+        .filter-select:focus, .filter-input:focus {
+            border-color: var(--primary);
             outline: none;
             background: white;
         }
 
         .btn-filter {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             padding: 12px 25px;
             border-radius: 10px;
@@ -564,7 +677,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .btn-filter:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
@@ -586,8 +699,29 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .btn-reset:hover {
-            border-color: #0B4F2E;
-            color: #0B4F2E;
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .btn-add {
+            background: var(--primary);
+            color: white;
+            padding: 12px 25px;
+            border-radius: 10px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            height: 45px;
+        }
+
+        .btn-add:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
         /* Table Card */
@@ -596,6 +730,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             border-radius: 20px;
             padding: 25px;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-bottom: 30px;
         }
 
         .table-header {
@@ -617,7 +752,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .table-header h3 i {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .table-container {
@@ -638,6 +773,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             font-size: 13px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
+            border-bottom: 2px solid var(--border-color);
         }
 
         .attendance-table td {
@@ -650,16 +786,16 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             background: var(--hover-color);
         }
 
-        .student-info {
+        .person-info {
             display: flex;
             align-items: center;
             gap: 12px;
         }
 
-        .student-avatar {
+        .person-avatar {
             width: 40px;
             height: 40px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 10px;
             display: flex;
             align-items: center;
@@ -669,13 +805,13 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             font-size: 16px;
         }
 
-        .student-details h4 {
+        .person-details h4 {
             font-size: 15px;
             margin-bottom: 3px;
             color: var(--text-primary);
         }
 
-        .student-details span {
+        .person-details span {
             font-size: 12px;
             color: var(--text-secondary);
             display: flex;
@@ -693,22 +829,22 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
 
         .badge-present {
             background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
+            color: var(--success);
         }
 
         .badge-absent {
             background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .badge-late {
             background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
+            color: var(--warning);
         }
 
         .grade-tag {
             background: rgba(11, 79, 46, 0.1);
-            color: #0B4F2E;
+            color: var(--primary);
             padding: 3px 8px;
             border-radius: 12px;
             font-size: 11px;
@@ -725,6 +861,16 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             font-weight: 500;
             display: inline-block;
             margin-left: 5px;
+        }
+
+        .time-tag {
+            background: rgba(108, 117, 125, 0.1);
+            color: #6c757d;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            display: inline-block;
         }
 
         .action-btns {
@@ -752,11 +898,15 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         }
 
         .btn-view:hover {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .btn-delete:hover {
-            color: #dc3545;
+            color: var(--danger);
+        }
+
+        .btn-edit:hover {
+            color: var(--warning);
         }
 
         .no-data {
@@ -774,6 +924,112 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
         .no-data h3 {
             color: var(--text-primary);
             margin-bottom: 10px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-primary);
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            border-color: var(--primary);
+            outline: none;
+        }
+
+        .modal-footer {
+            padding: 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn-save {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-cancel {
+            background: #e9ecef;
+            color: var(--text-primary);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
         }
 
         /* Responsive */
@@ -829,6 +1085,10 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
                 grid-template-columns: 1fr;
             }
             
+            .tab-nav {
+                flex-direction: column;
+            }
+            
             .date-nav {
                 flex-direction: column;
                 align-items: flex-start;
@@ -842,12 +1102,12 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
                 width: 100%;
             }
             
-            .btn-filter, .btn-reset {
+            .btn-filter, .btn-reset, .btn-add {
                 width: 100%;
                 justify-content: center;
             }
             
-            .student-info {
+            .person-info {
                 flex-direction: column;
                 text-align: center;
             }
@@ -909,18 +1169,7 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
             <!-- Header -->
             <div class="dashboard-header">
                 <h1>Attendance Management</h1>
-                <p>View and manage student attendance records</p>
-            </div>
-
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
-                </a>
+                <p>View and manage student and teacher attendance records</p>
             </div>
 
             <!-- Alert Messages -->
@@ -938,209 +1187,552 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
                 </div>
             <?php endif; ?>
 
-            <!-- Statistics -->
-            <div class="stats-container">
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Today's Total</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-calendar-check"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $total_today; ?></div>
-                    <div class="stat-label">Attendance records</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Present</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-user-check"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $present_today; ?></div>
-                    <div class="stat-label">Students present</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Absent</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-user-times"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $absent_today; ?></div>
-                    <div class="stat-label">Students absent</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Late</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-clock"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $late_today; ?></div>
-                    <div class="stat-label">Students late</div>
-                </div>
+            <!-- Tab Navigation -->
+            <div class="tab-nav">
+                <a href="?tab=students" class="tab-btn <?php echo $active_tab == 'students' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-graduate"></i> Student Attendance
+                </a>
+                <a href="?tab=teachers" class="tab-btn <?php echo $active_tab == 'teachers' ? 'active' : ''; ?>">
+                    <i class="fas fa-chalkboard-teacher"></i> Teacher Attendance
+                </a>
             </div>
 
-            <!-- Date Navigation -->
-            <div class="date-nav">
-                <div class="date-display">
-                    <h3><i class="fas fa-calendar-alt"></i> Attendance Records</h3>
+            <?php if($active_tab == 'students'): ?>
+                <!-- STUDENT ATTENDANCE SECTION -->
+                
+                <!-- Student Attendance Statistics -->
+                <div class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Today's Total</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-calendar-check"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $total_today; ?></div>
+                        <div class="stat-label">Student records</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Present</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-user-check"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $present_today; ?></div>
+                        <div class="stat-label">Students present</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Absent</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-user-times"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $absent_today; ?></div>
+                        <div class="stat-label">Students absent</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Late</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $late_today; ?></div>
+                        <div class="stat-label">Students late</div>
+                    </div>
                 </div>
-                <div class="date-picker">
-                    <form method="GET" action="" style="display: flex; gap: 10px;">
-                        <input type="date" name="date" class="date-input" value="<?php echo $date_filter; ?>">
-                        <button type="submit" class="btn-date">
-                            <i class="fas fa-search"></i> View Date
-                        </button>
+
+                <!-- Date Navigation -->
+                <div class="date-nav">
+                    <div class="date-display">
+                        <h3><i class="fas fa-calendar-alt"></i> Student Attendance Records</h3>
+                    </div>
+                    <div class="date-picker">
+                        <form method="GET" action="" style="display: flex; gap: 10px;">
+                            <input type="hidden" name="tab" value="students">
+                            <input type="date" name="date" class="date-input" value="<?php echo $date_filter; ?>">
+                            <button type="submit" class="btn-date">
+                                <i class="fas fa-search"></i> View Date
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Filters Bar -->
+                <div class="filters-bar">
+                    <form method="GET" action="" class="filters-form">
+                        <input type="hidden" name="tab" value="students">
+                        <input type="hidden" name="date" value="<?php echo $date_filter; ?>">
+                        
+                        <div class="filter-group">
+                            <label>Grade Level</label>
+                            <select name="grade" class="filter-select">
+                                <option value="">All Grades</option>
+                                <?php 
+                                $grade_levels->data_seek(0);
+                                while($grade = $grade_levels->fetch_assoc()): 
+                                ?>
+                                    <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
+                                        <?php echo $grade['grade_name']; ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+
+                        <div class="filter-group">
+                            <label>Subject</label>
+                            <select name="subject" class="filter-select">
+                                <option value="">All Subjects</option>
+                                <?php 
+                                $subjects->data_seek(0);
+                                while($subject = $subjects->fetch_assoc()): 
+                                ?>
+                                    <option value="<?php echo $subject['id']; ?>" <?php echo $subject_filter == $subject['id'] ? 'selected' : ''; ?>>
+                                        <?php echo $subject['subject_name']; ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+
+                        <div class="filter-group">
+                            <label>Status</label>
+                            <select name="status" class="filter-select">
+                                <option value="">All Status</option>
+                                <option value="Present" <?php echo $status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
+                                <option value="Absent" <?php echo $status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
+                                <option value="Late" <?php echo $status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
+                            </select>
+                        </div>
+
+                        <div class="filter-group" style="flex: 0 0 auto;">
+                            <button type="submit" class="btn-filter">
+                                <i class="fas fa-filter"></i> Apply Filters
+                            </button>
+                        </div>
+
+                        <div class="filter-group" style="flex: 0 0 auto;">
+                            <a href="attendance.php?tab=students" class="btn-reset">
+                                <i class="fas fa-redo-alt"></i> Reset
+                            </a>
+                        </div>
                     </form>
                 </div>
-            </div>
 
-            <!-- Filters Bar -->
-            <div class="filters-bar">
-                <form method="GET" action="" class="filters-form">
-                    <input type="hidden" name="date" value="<?php echo $date_filter; ?>">
-                    
-                    <div class="filter-group">
-                        <label>Grade Level</label>
-                        <select name="grade" class="filter-select">
-                            <option value="">All Grades</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
-                                    <?php echo $grade['grade_name']; ?>
-                                </option>
-                            <?php endwhile; ?>
-                        </select>
+                <!-- Student Attendance Table -->
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3><i class="fas fa-calendar-check"></i> Student Attendance Records</h3>
+                        <span class="grade-tag">Total: <?php echo $attendance_records ? $attendance_records->num_rows : 0; ?> records</span>
                     </div>
 
-                    <div class="filter-group">
-                        <label>Subject</label>
-                        <select name="subject" class="filter-select">
-                            <option value="">All Subjects</option>
-                            <?php 
-                            $subjects->data_seek(0);
-                            while($subject = $subjects->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $subject['id']; ?>" <?php echo $subject_filter == $subject['id'] ? 'selected' : ''; ?>>
-                                    <?php echo $subject['subject_name']; ?>
-                                </option>
-                            <?php endwhile; ?>
-                        </select>
-                    </div>
-
-                    <div class="filter-group">
-                        <label>Status</label>
-                        <select name="status" class="filter-select">
-                            <option value="">All Status</option>
-                            <option value="Present" <?php echo $status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
-                            <option value="Absent" <?php echo $status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
-                            <option value="Late" <?php echo $status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
-                        </select>
-                    </div>
-
-                    <div class="filter-group" style="flex: 0 0 auto;">
-                        <button type="submit" class="btn-filter">
-                            <i class="fas fa-filter"></i> Apply Filters
-                        </button>
-                    </div>
-
-                    <div class="filter-group" style="flex: 0 0 auto;">
-                        <a href="attendance.php" class="btn-reset">
-                            <i class="fas fa-redo-alt"></i> Reset
-                        </a>
-                    </div>
-                </form>
-            </div>
-
-            <!-- Attendance Table -->
-            <div class="table-card">
-                <div class="table-header">
-                    <h3><i class="fas fa-calendar-check"></i> Attendance Records</h3>
-                    <span class="grade-tag">Total: <?php echo $attendance_records ? $attendance_records->num_rows : 0; ?> records</span>
-                </div>
-
-                <div class="table-container">
-                    <table class="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Student</th>
-                                <th>ID Number</th>
-                                <th>Subject</th>
-                                <th>Grade</th>
-                                <th>Status</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
-                                <?php while($record = $attendance_records->fetch_assoc()): ?>
+                    <div class="table-container">
+                        <table class="attendance-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Student</th>
+                                    <th>ID Number</th>
+                                    <th>Subject</th>
+                                    <th>Grade</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
+                                    <?php while($record = $attendance_records->fetch_assoc()): ?>
+                                        <tr>
+                                            <td>
+                                                <span class="time-tag">
+                                                    <i class="far fa-calendar"></i>
+                                                    <?php echo date('M d, Y', strtotime($record['date'])); ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="person-info">
+                                                    <div class="person-avatar">
+                                                        <?php echo strtoupper(substr($record['student_name'], 0, 1)); ?>
+                                                    </div>
+                                                    <div class="person-details">
+                                                        <h4><?php echo htmlspecialchars($record['student_name']); ?></h4>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="grade-tag"><?php echo $record['student_id_number'] ?? 'N/A'; ?></span>
+                                            </td>
+                                            <td>
+                                                <span class="subject-tag"><?php echo htmlspecialchars($record['subject_name']); ?></span>
+                                            </td>
+                                            <td>
+                                                <span class="grade-tag"><?php echo htmlspecialchars($record['grade_name']); ?></span>
+                                            </td>
+                                            <td>
+                                                <span class="badge badge-<?php echo strtolower($record['status']); ?>">
+                                                    <?php echo $record['status']; ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="action-btns">
+                                                    <a href="view_attendance.php?id=<?php echo $record['id']; ?>" class="btn-icon btn-view" title="View Details">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                    <a href="?tab=students&delete=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                                       onclick="return confirm('Are you sure you want to delete this attendance record?')">
+                                                        <i class="fas fa-trash"></i>
+                                                    </a>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
                                     <tr>
-                                        <td>
-                                            <span class="activity-time">
-                                                <i class="far fa-calendar"></i>
-                                                <?php echo date('M d, Y', strtotime($record['date'])); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div class="student-info">
-                                                <div class="student-avatar">
-                                                    <?php echo strtoupper(substr($record['student_name'], 0, 1)); ?>
-                                                </div>
-                                                <div class="student-details">
-                                                    <h4><?php echo htmlspecialchars($record['student_name']); ?></h4>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <span class="grade-tag"><?php echo $record['student_id_number'] ?? 'N/A'; ?></span>
-                                        </td>
-                                        <td>
-                                            <span class="subject-tag"><?php echo htmlspecialchars($record['subject_name']); ?></span>
-                                        </td>
-                                        <td>
-                                            <span class="grade-tag"><?php echo htmlspecialchars($record['grade_name']); ?></span>
-                                        </td>
-                                        <td>
-                                            <span class="badge badge-<?php echo strtolower($record['status']); ?>">
-                                                <?php echo $record['status']; ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div class="action-btns">
-                                                <a href="view_attendance.php?id=<?php echo $record['id']; ?>" class="btn-icon btn-view" title="View Details">
-                                                    <i class="fas fa-eye"></i>
-                                                </a>
-                                                <a href="?delete=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
-                                                   onclick="return confirm('Are you sure you want to delete this attendance record?')">
-                                                    <i class="fas fa-trash"></i>
-                                                </a>
+                                        <td colspan="7">
+                                            <div class="no-data">
+                                                <i class="fas fa-calendar-times"></i>
+                                                <h3>No Student Attendance Records Found</h3>
+                                                <p>Try adjusting your filters or select a different date.</p>
                                             </div>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
-                            <?php else: ?>
-                                <tr>
-                                    <td colspan="7">
-                                        <div class="no-data">
-                                            <i class="fas fa-calendar-times"></i>
-                                            <h3>No Attendance Records Found</h3>
-                                            <p>Try adjusting your filters or select a different date.</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
+            <?php else: ?>
+                <!-- TEACHER ATTENDANCE SECTION -->
+                
+                <!-- Teacher Attendance Statistics -->
+                <div class="stats-container">
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Today's Total</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-calendar-check"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $teacher_today; ?></div>
+                        <div class="stat-label">Teacher records</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Present</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-user-check"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $teacher_present_today; ?></div>
+                        <div class="stat-label">Teachers present</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Absent</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-user-times"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $teacher_absent_today; ?></div>
+                        <div class="stat-label">Teachers absent</div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-header">
+                            <h3>Late</h3>
+                            <div class="stat-icon">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                        </div>
+                        <div class="stat-number"><?php echo $teacher_late_today; ?></div>
+                        <div class="stat-label">Teachers late</div>
+                    </div>
+                </div>
+
+                <!-- Date Navigation -->
+                <div class="date-nav">
+                    <div class="date-display">
+                        <h3><i class="fas fa-calendar-alt"></i> Teacher Attendance Records</h3>
+                    </div>
+                    <div class="date-picker">
+                        <form method="GET" action="" style="display: flex; gap: 10px;">
+                            <input type="hidden" name="tab" value="teachers">
+                            <input type="date" name="teacher_date" class="date-input" value="<?php echo $teacher_date_filter; ?>">
+                            <button type="submit" class="btn-date">
+                                <i class="fas fa-search"></i> View Date
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Add Teacher Attendance Button -->
+                <div style="margin-bottom: 20px; text-align: right;">
+                    <button class="btn-add" onclick="openAddTeacherModal()">
+                        <i class="fas fa-plus"></i> Add Teacher Attendance
+                    </button>
+                </div>
+
+                <!-- Filters Bar -->
+                <div class="filters-bar">
+                    <form method="GET" action="" class="filters-form">
+                        <input type="hidden" name="tab" value="teachers">
+                        <input type="hidden" name="teacher_date" value="<?php echo $teacher_date_filter; ?>">
+                        
+                        <div class="filter-group">
+                            <label>Teacher</label>
+                            <select name="teacher" class="filter-select">
+                                <option value="">All Teachers</option>
+                                <?php 
+                                $teachers->data_seek(0);
+                                while($teacher = $teachers->fetch_assoc()): 
+                                ?>
+                                    <option value="<?php echo $teacher['id']; ?>" <?php echo isset($_GET['teacher']) && $_GET['teacher'] == $teacher['id'] ? 'selected' : ''; ?>>
+                                        <?php echo $teacher['fullname']; ?>
+                                    </option>
+                                <?php endwhile; ?>
+                            </select>
+                        </div>
+
+                        <div class="filter-group">
+                            <label>Status</label>
+                            <select name="teacher_status" class="filter-select">
+                                <option value="">All Status</option>
+                                <option value="Present" <?php echo $teacher_status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
+                                <option value="Absent" <?php echo $teacher_status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
+                                <option value="Late" <?php echo $teacher_status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
+                            </select>
+                        </div>
+
+                        <div class="filter-group" style="flex: 0 0 auto;">
+                            <button type="submit" class="btn-filter">
+                                <i class="fas fa-filter"></i> Apply Filters
+                            </button>
+                        </div>
+
+                        <div class="filter-group" style="flex: 0 0 auto;">
+                            <a href="attendance.php?tab=teachers" class="btn-reset">
+                                <i class="fas fa-redo-alt"></i> Reset
+                            </a>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Teacher Attendance Table -->
+                <div class="table-card">
+                    <div class="table-header">
+                        <h3><i class="fas fa-calendar-check"></i> Teacher Attendance Records</h3>
+                        <span class="grade-tag">Total: <?php echo $teacher_attendance_records ? $teacher_attendance_records->num_rows : 0; ?> records</span>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="attendance-table">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>Teacher</th>
+                                    <th>ID Number</th>
+                                    <th>Time In</th>
+                                    <th>Time Out</th>
+                                    <th>Status</th>
+                                    <th>Remarks</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php if($teacher_attendance_records && $teacher_attendance_records->num_rows > 0): ?>
+                                    <?php while($record = $teacher_attendance_records->fetch_assoc()): ?>
+                                        <tr>
+                                            <td>
+                                                <span class="time-tag">
+                                                    <i class="far fa-calendar"></i>
+                                                    <?php echo date('M d, Y', strtotime($record['date'])); ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="person-info">
+                                                    <div class="person-avatar">
+                                                        <?php echo strtoupper(substr($record['teacher_name'], 0, 1)); ?>
+                                                    </div>
+                                                    <div class="person-details">
+                                                        <h4><?php echo htmlspecialchars($record['teacher_name']); ?></h4>
+                                                        <span><?php echo htmlspecialchars($record['teacher_email']); ?></span>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="grade-tag"><?php echo $record['teacher_id_number'] ?? 'N/A'; ?></span>
+                                            </td>
+                                            <td>
+                                                <?php if($record['time_in']): ?>
+                                                    <span class="time-tag">
+                                                        <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_in'])); ?>
+                                                    </span>
+                                                <?php else: ?>
+                                                    <span class="grade-tag">—</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if($record['time_out']): ?>
+                                                    <span class="time-tag">
+                                                        <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_out'])); ?>
+                                                    </span>
+                                                <?php else: ?>
+                                                    <span class="grade-tag">—</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <span class="badge badge-<?php echo strtolower($record['status']); ?>">
+                                                    <?php echo $record['status']; ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <?php echo htmlspecialchars($record['remarks'] ?? '—'); ?>
+                                            </td>
+                                            <td>
+                                                <div class="action-btns">
+                                                    <a href="#" class="btn-icon btn-edit" title="Edit" onclick="openEditTeacherModal(<?php echo htmlspecialchars(json_encode($record)); ?>)">
+                                                        <i class="fas fa-edit"></i>
+                                                    </a>
+                                                    <a href="?tab=teachers&delete_teacher=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                                       onclick="return confirm('Are you sure you want to delete this teacher attendance record?')">
+                                                        <i class="fas fa-trash"></i>
+                                                    </a>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endwhile; ?>
+                                <?php else: ?>
+                                    <tr>
+                                        <td colspan="8">
+                                            <div class="no-data">
+                                                <i class="fas fa-calendar-times"></i>
+                                                <h3>No Teacher Attendance Records Found</h3>
+                                                <p>Try adjusting your filters or select a different date.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Add Teacher Attendance Modal -->
+    <div class="modal" id="addTeacherModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-plus-circle"></i> Add Teacher Attendance</h3>
+                <button class="close-modal" onclick="closeAddTeacherModal()">&times;</button>
             </div>
+            <form method="POST" action="add_teacher_attendance.php">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Teacher</label>
+                        <select name="teacher_id" required>
+                            <option value="">Select Teacher</option>
+                            <?php 
+                            $teachers->data_seek(0);
+                            while($teacher = $teachers->fetch_assoc()): 
+                            ?>
+                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Date</label>
+                        <input type="date" name="date" value="<?php echo date('Y-m-d'); ?>" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Time In</label>
+                        <input type="time" name="time_in">
+                    </div>
+                    <div class="form-group">
+                        <label>Time Out</label>
+                        <input type="time" name="time_out">
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select name="status" required>
+                            <option value="Present">Present</option>
+                            <option value="Absent">Absent</option>
+                            <option value="Late">Late</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Remarks</label>
+                        <textarea name="remarks" rows="3" placeholder="Optional remarks"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeAddTeacherModal()">Cancel</button>
+                    <button type="submit" name="add_teacher_attendance" class="btn-save">Save Record</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Edit Teacher Attendance Modal -->
+    <div class="modal" id="editTeacherModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-edit"></i> Edit Teacher Attendance</h3>
+                <button class="close-modal" onclick="closeEditTeacherModal()">&times;</button>
+            </div>
+            <form method="POST" action="edit_teacher_attendance.php">
+                <input type="hidden" name="id" id="edit_id">
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Teacher</label>
+                        <select name="teacher_id" id="edit_teacher_id" required>
+                            <option value="">Select Teacher</option>
+                            <?php 
+                            $teachers->data_seek(0);
+                            while($teacher = $teachers->fetch_assoc()): 
+                            ?>
+                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Date</label>
+                        <input type="date" name="date" id="edit_date" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Time In</label>
+                        <input type="time" name="time_in" id="edit_time_in">
+                    </div>
+                    <div class="form-group">
+                        <label>Time Out</label>
+                        <input type="time" name="time_out" id="edit_time_out">
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select name="status" id="edit_status" required>
+                            <option value="Present">Present</option>
+                            <option value="Absent">Absent</option>
+                            <option value="Late">Late</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Remarks</label>
+                        <textarea name="remarks" id="edit_remarks" rows="3" placeholder="Optional remarks"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeEditTeacherModal()">Cancel</button>
+                    <button type="submit" name="edit_teacher_attendance" class="btn-save">Update Record</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -1155,6 +1747,44 @@ $sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_le
                 }, 300);
             });
         }, 5000);
+
+        // Add Teacher Modal Functions
+        function openAddTeacherModal() {
+            document.getElementById('addTeacherModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeAddTeacherModal() {
+            document.getElementById('addTeacherModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        // Edit Teacher Modal Functions
+        function openEditTeacherModal(record) {
+            document.getElementById('edit_id').value = record.id;
+            document.getElementById('edit_teacher_id').value = record.teacher_id;
+            document.getElementById('edit_date').value = record.date;
+            document.getElementById('edit_time_in').value = record.time_in ? record.time_in.slice(0,5) : '';
+            document.getElementById('edit_time_out').value = record.time_out ? record.time_out.slice(0,5) : '';
+            document.getElementById('edit_status').value = record.status;
+            document.getElementById('edit_remarks').value = record.remarks || '';
+            
+            document.getElementById('editTeacherModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeEditTeacherModal() {
+            document.getElementById('editTeacherModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.classList.remove('active');
+                document.body.style.overflow = 'auto';
+            }
+        }
     </script>
 </body>
 </html>

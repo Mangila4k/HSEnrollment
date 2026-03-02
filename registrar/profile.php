@@ -905,18 +905,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                 <h1>My Profile</h1>
                 <p>View and manage your account information</p>
             </div>
-
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $registrar_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
-                </a>
-            </div>
-
+            
             <!-- Alert Messages -->
             <?php if($success_message): ?>
                 <div class="alert alert-success">
