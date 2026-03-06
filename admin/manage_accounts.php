@@ -23,6 +23,34 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
+// Handle approval from manage_accounts page
+if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
+    $approve_id = $_GET['approve'];
+    
+    $stmt = $conn->prepare("UPDATE users SET is_approved = 1 WHERE id = ?");
+    $stmt->bind_param("i", $approve_id);
+    if($stmt->execute()) {
+        $success_message = "User approved successfully!";
+    } else {
+        $error_message = "Error approving user: " . $conn->error;
+    }
+    $stmt->close();
+}
+
+// Handle rejection (delete)
+if(isset($_GET['reject']) && is_numeric($_GET['reject'])) {
+    $reject_id = $_GET['reject'];
+    
+    $stmt = $conn->prepare("DELETE FROM users WHERE id = ? AND is_approved = 0");
+    $stmt->bind_param("i", $reject_id);
+    if($stmt->execute()) {
+        $success_message = "User rejected and removed successfully!";
+    } else {
+        $error_message = "Error rejecting user: " . $conn->error;
+    }
+    $stmt->close();
+}
+
 // Handle user deletion
 if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $delete_id = $_GET['delete'];
@@ -56,8 +84,17 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
 $role_filter = isset($_GET['role']) ? $_GET['role'] : '';
 $search = isset($_GET['search']) ? $_GET['search'] : '';
 
-// Build query
-$query = "SELECT * FROM users WHERE 1=1";
+// Get pending accounts count
+$pending_count_query = "SELECT COUNT(*) as count FROM users WHERE is_approved = 0";
+$pending_count_result = $conn->query($pending_count_query);
+$pending_count = $pending_count_result->fetch_assoc()['count'];
+
+// Get pending accounts
+$pending_query = "SELECT * FROM users WHERE is_approved = 0 ORDER BY created_at DESC";
+$pending_users = $conn->query($pending_query);
+
+// Build query for approved users only
+$query = "SELECT * FROM users WHERE is_approved = 1";
 $params = [];
 $types = "";
 
@@ -86,11 +123,11 @@ if(!empty($params)) {
 $stmt->execute();
 $users = $stmt->get_result();
 
-// Get counts by role
+// Get counts by role (approved users only)
 $counts = [];
 $roles = ['Admin', 'Registrar', 'Teacher', 'Student'];
 foreach($roles as $role) {
-    $result = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = '$role'");
+    $result = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = '$role' AND is_approved = 1");
     $counts[$role] = $result->fetch_assoc()['count'];
 }
 
@@ -440,6 +477,142 @@ $total_users = array_sum($counts);
             font-size: 14px;
         }
 
+        /* Pending Section */
+        .pending-section {
+            background: white;
+            border-radius: 20px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            border-left: 4px solid #ffc107;
+        }
+
+        .pending-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .pending-header h3 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .pending-header h3 i {
+            color: #ffc107;
+        }
+
+        .pending-badge {
+            background: #ffc107;
+            color: #000;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .pending-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .pending-table th {
+            text-align: left;
+            padding: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: #f8f9fa;
+        }
+
+        .pending-table td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .pending-table tbody tr:hover {
+            background: var(--hover-color);
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-block;
+            text-transform: uppercase;
+        }
+
+        .status-badge.pending {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .btn-approve {
+            background: #28a745;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+            margin-right: 5px;
+        }
+
+        .btn-approve:hover {
+            background: #218838;
+            transform: translateY(-2px);
+        }
+
+        .btn-reject {
+            background: #dc3545;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.3s;
+        }
+
+        .btn-reject:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+
+        .no-pending {
+            text-align: center;
+            padding: 30px;
+            color: var(--text-secondary);
+        }
+
+        .no-pending i {
+            font-size: 40px;
+            margin-bottom: 10px;
+            opacity: 0.3;
+        }
+
         /* Section Title */
         .section-title {
             padding: 20px 0;
@@ -482,10 +655,6 @@ $total_users = array_sum($counts);
             background: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
-        }
-
-        .btn-add i {
-            font-size: 16px;
         }
 
         /* Search and Filter Bar */
@@ -802,6 +971,25 @@ $total_users = array_sum($counts);
             .data-table td {
                 font-size: 13px;
             }
+            
+            .pending-header {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            
+            .pending-table {
+                font-size: 12px;
+            }
+            
+            .pending-table td {
+                padding: 8px;
+            }
+            
+            .btn-approve, .btn-reject {
+                padding: 4px 8px;
+                font-size: 10px;
+            }
         }
     </style>
 </head>
@@ -869,7 +1057,18 @@ $total_users = array_sum($counts);
                         </div>
                     </div>
                     <div class="stat-number"><?php echo $total_users; ?></div>
-                    <div class="stat-label">All accounts</div>
+                    <div class="stat-label">Approved accounts</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Pending</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $pending_count; ?></div>
+                    <div class="stat-label">Awaiting approval</div>
                 </div>
 
                 <div class="stat-card">
@@ -881,17 +1080,6 @@ $total_users = array_sum($counts);
                     </div>
                     <div class="stat-number"><?php echo $counts['Admin']; ?></div>
                     <div class="stat-label">Administrators</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>Registrars</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-user-tie"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $counts['Registrar']; ?></div>
-                    <div class="stat-label">Registrar staff</div>
                 </div>
 
                 <div class="stat-card">
@@ -919,9 +1107,67 @@ $total_users = array_sum($counts);
                 </div>
             <?php endif; ?>
 
+            <!-- Pending Accounts Section -->
+            <?php if($pending_count > 0): ?>
+            <div class="pending-section">
+                <div class="pending-header">
+                    <h3>
+                        <i class="fas fa-clock"></i>
+                        Pending Account Approvals
+                    </h3>
+                    <span class="pending-badge">
+                        <i class="fas fa-users"></i> <?php echo $pending_count; ?> pending
+                    </span>
+                </div>
+
+                <table class="pending-table">
+                    <thead>
+                        <tr>
+                            <th>ID Number</th>
+                            <th>Full Name</th>
+                            <th>Email</th>
+                            <th>Role</th>
+                            <th>Registered On</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php while($pending = $pending_users->fetch_assoc()): ?>
+                        <tr>
+                            <td>
+                                <span class="id-badge"><?php echo $pending['id_number'] ?: 'N/A'; ?></span>
+                            </td>
+                            <td><strong><?php echo htmlspecialchars($pending['fullname']); ?></strong></td>
+                            <td><?php echo htmlspecialchars($pending['email']); ?></td>
+                            <td>
+                                <span class="status-badge pending"><?php echo $pending['role']; ?></span>
+                            </td>
+                            <td>
+                                <i class="far fa-calendar"></i>
+                                <?php echo date('M d, Y h:i A', strtotime($pending['created_at'])); ?>
+                            </td>
+                            <td>
+                                <a href="?approve=<?php echo $pending['id']; ?>" 
+                                   class="btn-approve"
+                                   onclick="return confirm('Approve this user account?')">
+                                    <i class="fas fa-check"></i> Approve
+                                </a>
+                                <a href="?reject=<?php echo $pending['id']; ?>" 
+                                   class="btn-reject"
+                                   onclick="return confirm('Reject this registration request? This action cannot be undone.')">
+                                    <i class="fas fa-times"></i> Reject
+                                </a>
+                            </td>
+                        </tr>
+                        <?php endwhile; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
+
             <!-- Section Title and Add Button -->
             <div class="section-title">
-                <h2><i class="fas fa-list"></i> All Accounts</h2>
+                <h2><i class="fas fa-list"></i> Approved Accounts</h2>
                 <a href="add_account.php" class="btn-add">
                     <i class="fas fa-plus-circle"></i> Add New Account
                 </a>
@@ -1011,8 +1257,8 @@ $total_users = array_sum($counts);
                                 <td colspan="6">
                                     <div class="no-data">
                                         <i class="fas fa-users"></i>
-                                        <h3>No Users Found</h3>
-                                        <p>Click the "Add New Account" button to create your first user.</p>
+                                        <h3>No Approved Users Found</h3>
+                                        <p><?php echo $pending_count > 0 ? 'Check the pending approvals section above.' : 'Click the "Add New Account" button to create your first user.'; ?></p>
                                     </div>
                                 </td>
                             </tr>

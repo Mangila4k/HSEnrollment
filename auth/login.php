@@ -12,24 +12,29 @@ if(isset($_POST['login'])){
     if($result->num_rows > 0){
         $user = $result->fetch_assoc();
         if(password_verify($password, $user['password'])){
-            $_SESSION['user'] = $user;
+            // Check if account is approved
+            if($user['is_approved'] == 0) {
+                $error = "Your account is pending approval from the administrator. Please wait for approval before logging in.";
+            } else {
+                $_SESSION['user'] = $user;
 
-            // Redirect based on role
-            switch($user['role']){
-                case 'Admin':
-                    header("Location: ../admin/dashboard.php");
-                    break;
-                case 'Registrar':
-                    header("Location: ../registrar/enrollments.php");
-                    break;
-                case 'Teacher':
-                    header("Location: ../teacher/dashboard.php");
-                    break;
-                case 'Student':
-                    header("Location: ../student/dashboard.php");
-                    break;
+                // Redirect based on role
+                switch($user['role']){
+                    case 'Admin':
+                        header("Location: ../admin/dashboard.php");
+                        break;
+                    case 'Registrar':
+                        header("Location: ../registrar/enrollments.php");
+                        break;
+                    case 'Teacher':
+                        header("Location: ../teacher/dashboard.php");
+                        break;
+                    case 'Student':
+                        header("Location: ../student/dashboard.php");
+                        break;
+                }
+                exit();
             }
-            exit();
         } else {
             $error = "Incorrect password!";
         }

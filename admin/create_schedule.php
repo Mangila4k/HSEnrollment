@@ -46,7 +46,7 @@ if(isset($_POST['add_schedule'])) {
     $time_slot_id = $_POST['time_slot_id'];
     $room = $_POST['room'];
     $school_year = $_POST['school_year'];
-    $semester = $_POST['semester'];
+    $quarter = $_POST['quarter']; // <-- changed from semester to quarter
 
     // Check for teacher conflict
     $teacher_conflict = $conn->query("
@@ -60,6 +60,7 @@ if(isset($_POST['add_schedule'])) {
         AND cs.day_id = '$day_id' 
         AND cs.time_slot_id = '$time_slot_id'
         AND cs.school_year = '$school_year'
+        AND cs.quarter = '$quarter'
     ");
 
     if($teacher_conflict->num_rows > 0) {
@@ -78,6 +79,7 @@ if(isset($_POST['add_schedule'])) {
             AND cs.day_id = '$day_id' 
             AND cs.time_slot_id = '$time_slot_id'
             AND cs.school_year = '$school_year'
+            AND cs.quarter = '$quarter'
             AND cs.room IS NOT NULL 
             AND cs.room != ''
         ");
@@ -88,8 +90,8 @@ if(isset($_POST['add_schedule'])) {
         } else {
             // No conflicts, insert schedule
             $insert = $conn->query("
-                INSERT INTO class_schedules (section_id, subject_id, teacher_id, day_id, time_slot_id, room, school_year, semester)
-                VALUES ('$section_id', '$subject_id', '$teacher_id', '$day_id', '$time_slot_id', '$room', '$school_year', '$semester')
+                INSERT INTO class_schedules (section_id, subject_id, teacher_id, day_id, time_slot_id, room, school_year, quarter, status)
+                VALUES ('$section_id', '$subject_id', '$teacher_id', '$day_id', '$time_slot_id', '$room', '$school_year', '$quarter', 'active')
             ");
             
             if($insert) {
@@ -101,7 +103,7 @@ if(isset($_POST['add_schedule'])) {
     }
 }
 
-// Get subjects for this grade level - FIXED: Removed subject_code
+// Get subjects for this grade level
 $subjects = $conn->query("
     SELECT id, subject_name 
     FROM subjects 
@@ -123,7 +125,7 @@ $days = $conn->query("SELECT * FROM days_of_week ORDER BY day_order");
 // Get time slots
 $time_slots = $conn->query("SELECT * FROM time_slots ORDER BY start_time");
 
-// Get current schedules for this section with all details - FIXED: Removed subject_code
+// Get current schedules for this section with all details
 $schedules = $conn->query("
     SELECT cs.*, sub.subject_name, u.fullname as teacher_name,
            d.day_name, d.day_order, ts.start_time, ts.end_time, ts.slot_name
@@ -979,10 +981,11 @@ if($schedules && $schedules->num_rows > 0) {
 
                         <div class="form-group">
                             <label>Semester</label>
-                            <select name="semester">
-                                <option value="">Full Year</option>
-                                <option value="1st Semester">1st Semester</option>
-                                <option value="2nd Semester">2nd Semester</option>
+                            <select name="Quarter">
+                                <option value="1st Quarter">1st Quarter</option>
+                                <option value="2nd Quarter">2nd Quarter</option>
+                                <option value="2nd Quarter">2nd Quarter</option>
+                                <option value="2nd Quarter">2nd Quarter</option>
                             </select>
                         </div>
 

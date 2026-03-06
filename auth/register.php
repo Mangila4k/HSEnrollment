@@ -68,22 +68,23 @@ if(isset($_POST['register'])){
         $check_id->close();
     }
 
-    // If no errors, insert the user
+    // If no errors, insert the user (with is_approved = 0)
     if(empty($errors)) {
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
         $role = "Student"; // Default role for registration
+        $is_approved = 0; // Not approved by default
         
         // Insert based on whether ID number is provided
         if($id_number) {
-            $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("sssss", $id_number, $fullname, $email, $hashed_password, $role);
+            $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role, is_approved) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("sssssi", $id_number, $fullname, $email, $hashed_password, $role, $is_approved);
         } else {
-            $stmt = $conn->prepare("INSERT INTO users (fullname, email, password, role) VALUES (?, ?, ?, ?)");
-            $stmt->bind_param("ssss", $fullname, $email, $hashed_password, $role);
+            $stmt = $conn->prepare("INSERT INTO users (fullname, email, password, role, is_approved) VALUES (?, ?, ?, ?, ?)");
+            $stmt->bind_param("ssssi", $fullname, $email, $hashed_password, $role, $is_approved);
         }
         
         if($stmt->execute()) {
-            $success = "Registration successful! You can now login.";
+            $success = "Registration successful! Your account is pending approval from the administrator. You will be able to login once approved.";
             // Clear form data
             $_POST = array();
         } else {
