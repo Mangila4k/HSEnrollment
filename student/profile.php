@@ -25,27 +25,26 @@ if(isset($_SESSION['error_message'])) {
 }
 
 // Get student details
-$query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
+$query = "SELECT * FROM users WHERE id = :student_id AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$result = $stmt->get_result();
-$student = $result->fetch_assoc();
-$stmt->close();
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Get student's enrollment information
 $enrollment_query = "
     SELECT e.*, g.grade_name
     FROM enrollments e
     JOIN grade_levels g ON e.grade_id = g.id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    WHERE e.student_id = :student_id AND e.status = 'Enrolled'
     ORDER BY e.created_at DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 $grade_name = $enrollment ? $enrollment['grade_name'] : 'Not Enrolled';
 $strand = $enrollment ? ($enrollment['strand'] ?? 'N/A') : 'N/A';
@@ -64,18 +63,18 @@ $attendance_stats = [
 $attendance_query = "
     SELECT status, COUNT(*) as count
     FROM attendance
-    WHERE student_id = ?
+    WHERE student_id = :student_id
     GROUP BY status
 ";
 $stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$attendance_result = $stmt->get_result();
-while($row = $attendance_result->fetch_assoc()) {
+
+while($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $attendance_stats[strtolower($row['status'])] = $row['count'];
     $attendance_stats['total'] += $row['count'];
 }
-$stmt->close();
+$stmt = null;
 
 $attendance_rate = $attendance_stats['total'] > 0 
     ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
@@ -84,13 +83,13 @@ $attendance_rate = $attendance_stats['total'] > 0
 // Get enrolled subjects count
 $subjects_count = 0;
 if($enrollment && isset($enrollment['grade_id'])) {
-    $subjects_query = "SELECT COUNT(*) as count FROM subjects WHERE grade_id = ?";
+    $subjects_query = "SELECT COUNT(*) as count FROM subjects WHERE grade_id = :grade_id";
     $stmt = $conn->prepare($subjects_query);
-    $stmt->bind_param("i", $enrollment['grade_id']);
+    $stmt->bindParam(':grade_id', $enrollment['grade_id'], PDO::PARAM_INT);
     $stmt->execute();
-    $subjects_result = $stmt->get_result();
-    $subjects_count = $subjects_result->fetch_assoc()['count'];
-    $stmt->close();
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $subjects_count = $row['count'] ?? 0;
+    $stmt = null;
 }
 
 $account_created = $student['created_at'];
@@ -278,57 +277,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             font-size: 16px;
         }
 
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Alert Messages */
         .alert {
             padding: 15px 20px;
             border-radius: 12px;
@@ -712,7 +660,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             margin-bottom: 10px;
         }
 
-        /* Responsive */
         @media (max-width: 1200px) {
             .profile-grid {
                 grid-template-columns: 1fr;
@@ -757,12 +704,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                 flex-direction: column;
                 gap: 15px;
                 align-items: flex-start;
-            }
-            
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
             }
             
             .academic-grid {
@@ -1021,6 +962,5 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             });
         }, 5000);
     </script>
-    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

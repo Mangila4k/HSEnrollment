@@ -1,30 +1,37 @@
 <?php
-// Database connection
-$servername = "localhost"; // MySQL server
-$username = "root";        // default XAMPP username
-$password = "";            // default XAMPP password is empty
-$database = "hs_enrollment"; // your database name
+// file: config/database.php
 
-// Create connection
-$conn = new mysqli($servername, $username, $password, $database);
+class Database {
+    private $host = "localhost";
+    private $db_name = "hs_enrollment";
+    private $username = "root";
+    private $password = "";
+    public $conn;
 
-// Check connection
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
+    public function getConnection() {
+        $this->conn = null;
+        try {
+            $this->conn = new PDO(
+                "mysql:host=" . $this->host . ";dbname=" . $this->db_name,
+                $this->username,
+                $this->password
+            );
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $this->conn->exec("set names utf8mb4");
+        } catch(PDOException $e) {
+            error_log("Connection error: " . $e->getMessage());
+            echo "Connection error: " . $e->getMessage();
+        }
+        return $this->conn;
+    }
 }
 
-// Additional connection check
+// Create a global connection variable for procedural style
+$database = new Database();
+$conn = $database->getConnection();
+
+// Optional: Check if connection was successful
 if (!$conn) {
-    die("Database connection failed: " . mysqli_connect_error());
+    die("Database connection failed. Please check your database configuration.");
 }
-
-// Note: The prepare statement check cannot be here because $query is not defined
-// This check should be used in each individual file when preparing queries
-// Example:
-// $stmt = $conn->prepare($query);
-// if (!$stmt) {
-//     die("Error preparing query: " . $conn->error);
-// }
-
-// echo "Database Connected Successfully!";
 ?>

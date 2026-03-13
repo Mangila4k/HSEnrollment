@@ -25,27 +25,26 @@ if(isset($_SESSION['error_message'])) {
 }
 
 // Get student details
-$query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
+$query = "SELECT * FROM users WHERE id = :student_id AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$result = $stmt->get_result();
-$student = $result->fetch_assoc();
-$stmt->close();
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Get student's enrollment information
 $enrollment_query = "
     SELECT e.*, g.grade_name
     FROM enrollments e
     JOIN grade_levels g ON e.grade_id = g.id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    WHERE e.student_id = :student_id AND e.status = 'Enrolled'
     ORDER BY e.created_at DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Handle profile update
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -71,35 +70,38 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         
         // Check if email already exists (excluding current student)
         if(empty($errors)) {
-            $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $student_id);
+            $check_email = $conn->prepare("SELECT id FROM users WHERE email = :email AND id != :student_id");
+            $check_email->bindParam(':email', $email, PDO::PARAM_STR);
+            $check_email->bindParam(':student_id', $student_id, PDO::PARAM_INT);
             $check_email->execute();
-            $check_email->store_result();
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
+            $check_email = null;
         }
         
         // Check if ID number already exists (if provided and excluding current student)
         if(empty($errors) && $id_number) {
-            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $student_id);
+            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = :id_number AND id != :student_id");
+            $check_id->bindParam(':id_number', $id_number, PDO::PARAM_STR);
+            $check_id->bindParam(':student_id', $student_id, PDO::PARAM_INT);
             $check_id->execute();
-            $check_id->store_result();
             
-            if($check_id->num_rows > 0) {
+            if($check_id->rowCount() > 0) {
                 $errors[] = "ID number already exists for another user";
             }
-            $check_id->close();
+            $check_id = null;
         }
         
         // If no errors, update the profile
         if(empty($errors)) {
-            $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
+            $update_query = "UPDATE users SET fullname = :fullname, email = :email, id_number = :id_number WHERE id = :student_id";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $student_id);
+            $update_stmt->bindParam(':fullname', $fullname, PDO::PARAM_STR);
+            $update_stmt->bindParam(':email', $email, PDO::PARAM_STR);
+            $update_stmt->bindParam(':id_number', $id_number, PDO::PARAM_STR);
+            $update_stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
             
             if($update_stmt->execute()) {
                 // Update session
@@ -111,9 +113,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 header("Location: settings.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errorInfo = $update_stmt->errorInfo();
+                $errors[] = "Database error: " . ($errorInfo[2] ?? 'Unknown error');
             }
-            $update_stmt->close();
+            $update_stmt = null;
         }
         
         // If there are errors, store them
@@ -152,18 +155,20 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // If no errors, update password
         if(empty($errors)) {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
-            $update_query = "UPDATE users SET password = ? WHERE id = ?";
+            $update_query = "UPDATE users SET password = :password WHERE id = :student_id";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $student_id);
+            $update_stmt->bindParam(':password', $hashed_password, PDO::PARAM_STR);
+            $update_stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
             
             if($update_stmt->execute()) {
                 $_SESSION['success_message'] = "Password changed successfully!";
                 header("Location: settings.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errorInfo = $update_stmt->errorInfo();
+                $errors[] = "Database error: " . ($errorInfo[2] ?? 'Unknown error');
             }
-            $update_stmt->close();
+            $update_stmt = null;
         }
         
         // If there are errors, store them
@@ -210,7 +215,7 @@ $profile_visibility = 'private';
 $show_grades = false;
 $show_attendance = false;
 
-$account_created = $student['created_at'];
+$account_created = $student['created_at'] ?? date('Y-m-d H:i:s');
 ?>
 
 <!DOCTYPE html>
@@ -503,6 +508,7 @@ $account_created = $student['created_at'];
             transition: all 0.3s;
             color: var(--text-secondary);
             border: 2px solid transparent;
+            cursor: pointer;
         }
 
         .settings-tab:hover {
@@ -960,19 +966,19 @@ $account_created = $student['created_at'];
 
             <!-- Settings Navigation -->
             <div class="settings-nav">
-                <a href="#profile" class="settings-tab active" onclick="showTab('profile')">
+                <a href="#profile" class="settings-tab active" onclick="showTab('profile', event)">
                     <i class="fas fa-user"></i> Profile
                 </a>
-                <a href="#account" class="settings-tab" onclick="showTab('account')">
+                <a href="#account" class="settings-tab" onclick="showTab('account', event)">
                     <i class="fas fa-lock"></i> Account Security
                 </a>
-                <a href="#notifications" class="settings-tab" onclick="showTab('notifications')">
+                <a href="#notifications" class="settings-tab" onclick="showTab('notifications', event)">
                     <i class="fas fa-bell"></i> Notifications
                 </a>
-                <a href="#privacy" class="settings-tab" onclick="showTab('privacy')">
+                <a href="#privacy" class="settings-tab" onclick="showTab('privacy', event)">
                     <i class="fas fa-shield-alt"></i> Privacy
                 </a>
-                <a href="#danger" class="settings-tab" onclick="showTab('danger')">
+                <a href="#danger" class="settings-tab" onclick="showTab('danger', event)">
                     <i class="fas fa-exclamation-triangle"></i> Danger Zone
                 </a>
             </div>
@@ -985,12 +991,12 @@ $account_created = $student['created_at'];
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Full Name <span>*</span></label>
-                                <input type="text" name="fullname" value="<?php echo htmlspecialchars($student['fullname']); ?>" required>
+                                <input type="text" name="fullname" value="<?php echo htmlspecialchars($student['fullname'] ?? ''); ?>" required>
                             </div>
 
                             <div class="form-group">
                                 <label>Email Address <span>*</span></label>
-                                <input type="email" name="email" value="<?php echo htmlspecialchars($student['email']); ?>" required>
+                                <input type="email" name="email" value="<?php echo htmlspecialchars($student['email'] ?? ''); ?>" required>
                             </div>
                         </div>
 
@@ -1080,7 +1086,7 @@ $account_created = $student['created_at'];
                     <h3><i class="fas fa-history"></i> Recent Activity</h3>
                     <div style="text-align: center; padding: 20px;">
                         <i class="fas fa-clock" style="font-size: 40px; color: var(--text-secondary); opacity: 0.3; margin-bottom: 10px;"></i>
-                        <p style="color: var(--text-secondary);">Last login: <?php echo date('F d, Y h:i A', strtotime($student['created_at'])); ?></p>
+                        <p style="color: var(--text-secondary);">Last login: <?php echo isset($student['created_at']) ? date('F d, Y h:i A', strtotime($student['created_at'])) : 'N/A'; ?></p>
                         <p style="color: var(--text-secondary);">Account created: <?php echo date('F d, Y', strtotime($account_created)); ?></p>
                     </div>
                 </div>
@@ -1183,7 +1189,7 @@ $account_created = $student['created_at'];
                     <div class="danger-zone">
                         <h4><i class="fas fa-trash-alt"></i> Delete Account</h4>
                         <p>Once you delete your account, there is no going back. Please be certain.</p>
-                        <button class="btn-danger" onclick="confirmDelete()">
+                        <button type="button" class="btn-danger" onclick="confirmDelete()">
                             <i class="fas fa-trash"></i> Delete My Account
                         </button>
                     </div>
@@ -1191,7 +1197,7 @@ $account_created = $student['created_at'];
                     <div class="danger-zone" style="margin-top: 20px;">
                         <h4><i class="fas fa-sign-out-alt"></i> Deactivate Account</h4>
                         <p>Temporarily disable your account. You can reactivate it by logging in again.</p>
-                        <button class="btn-danger" style="background: #ffc107; color: #2b2d42;" onclick="confirmDeactivate()">
+                        <button type="button" class="btn-danger" style="background: #ffc107; color: #2b2d42;" onclick="confirmDeactivate()">
                             <i class="fas fa-pause-circle"></i> Deactivate Account
                         </button>
                     </div>
@@ -1207,7 +1213,11 @@ $account_created = $student['created_at'];
 
     <script>
         // Tab switching
-        function showTab(tabId) {
+        function showTab(tabId, event) {
+            if (event) {
+                event.preventDefault();
+            }
+            
             // Hide all tab contents
             document.querySelectorAll('.settings-tab-content').forEach(tab => {
                 tab.style.display = 'none';
@@ -1222,7 +1232,16 @@ $account_created = $student['created_at'];
             document.getElementById(tabId).style.display = 'block';
             
             // Add active class to clicked tab
-            event.target.classList.add('active');
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Find the tab with matching href
+                document.querySelectorAll('.settings-tab').forEach(tab => {
+                    if (tab.getAttribute('href') === '#' + tabId) {
+                        tab.classList.add('active');
+                    }
+                });
+            }
         }
 
         // Toggle password fields

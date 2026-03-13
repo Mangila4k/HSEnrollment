@@ -13,17 +13,50 @@ $success = '';
 
 if(isset($_POST['register'])){
     // Get form data
-    $fullname = trim($_POST['fullname']);
+    $firstname = trim($_POST['firstname']);
+    $middlename = !empty($_POST['middlename']) ? trim($_POST['middlename']) : null;
+    $lastname = trim($_POST['lastname']);
+    $birthdate = $_POST['birthdate'];
+    $gender = $_POST['gender'];
     $email = trim($_POST['email']);
     $password = $_POST['password'];
     $confirm_password = $_POST['confirm_password'];
     $id_number = !empty($_POST['id_number']) ? trim($_POST['id_number']) : null;
+    $role = "Student"; // Default role for registration
+    
+    // Combine names for fullname (for backward compatibility)
+    $fullname = trim($firstname . ' ' . ($middlename ? $middlename . ' ' : '') . $lastname);
     
     // Validation
     $errors = [];
     
-    if(empty($fullname)) {
-        $errors[] = "Full name is required";
+    if(empty($firstname)) {
+        $errors[] = "First name is required";
+    }
+    
+    if(empty($lastname)) {
+        $errors[] = "Last name is required";
+    }
+    
+    if(empty($birthdate)) {
+        $errors[] = "Birthdate is required";
+    } else {
+        // Validate age (at least 15 years old for senior high school)
+        $birthdate_obj = new DateTime($birthdate);
+        $today = new DateTime();
+        $age = $today->diff($birthdate_obj)->y;
+        
+        if($age < 15) {
+            $errors[] = "You must be at least 15 years old to register";
+        } elseif($age > 30) {
+            $errors[] = "Age exceeds maximum allowed (30 years)";
+        }
+    }
+    
+    if(empty($gender)) {
+        $errors[] = "Gender is required";
+    } elseif(!in_array($gender, ['Male', 'Female', 'Other'])) {
+        $errors[] = "Invalid gender selection";
     }
     
     if(empty($email)) {
@@ -68,22 +101,33 @@ if(isset($_POST['register'])){
         $check_id->close();
     }
 
-    // If no errors, insert the user
+    // If no errors, insert the user with pending status
     if(empty($errors)) {
         $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $role = "Student"; // Default role for registration
+        $status = 'pending'; // Set status to pending
+        
+        // Update the database schema first - you need to add these columns to your users table
+        // Run this SQL in your database:
+        /*
+        ALTER TABLE users 
+        ADD COLUMN firstname VARCHAR(100) AFTER id_number,
+        ADD COLUMN middlename VARCHAR(50) AFTER firstname,
+        ADD COLUMN lastname VARCHAR(100) AFTER middlename,
+        ADD COLUMN birthdate DATE AFTER lastname,
+        ADD COLUMN gender ENUM('Male', 'Female', 'Other') AFTER birthdate;
+        */
         
         // Insert based on whether ID number is provided
         if($id_number) {
-            $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("sssss", $id_number, $fullname, $email, $hashed_password, $role);
+            $stmt = $conn->prepare("INSERT INTO users (id_number, firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("sssssssssss", $id_number, $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
         } else {
-            $stmt = $conn->prepare("INSERT INTO users (fullname, email, password, role) VALUES (?, ?, ?, ?)");
-            $stmt->bind_param("ssss", $fullname, $email, $hashed_password, $role);
+            $stmt = $conn->prepare("INSERT INTO users (firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("ssssssssss", $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
         }
         
         if($stmt->execute()) {
-            $success = "Registration successful! You can now login.";
+            $success = "Registration successful! Your account is pending approval from the administrator. You will be notified once your account is approved.";
             // Clear form data
             $_POST = array();
         } else {
@@ -109,6 +153,8 @@ if(isset($_POST['register'])){
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Flatpickr for date picker -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <style>
         * {
             margin: 0;
@@ -155,7 +201,7 @@ if(isset($_POST['register'])){
         .register-container {
             background: white;
             width: 100%;
-            max-width: 500px;
+            max-width: 700px;
             border-radius: 30px;
             padding: 50px 40px;
             box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
@@ -242,6 +288,20 @@ if(isset($_POST['register'])){
             font-size: 18px;
         }
 
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .form-row-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
         .form-group {
             margin-bottom: 20px;
         }
@@ -265,7 +325,8 @@ if(isset($_POST['register'])){
             position: relative;
         }
 
-        .input-wrapper input {
+        .input-wrapper input,
+        .input-wrapper select {
             width: 100%;
             padding: 14px 45px 14px 16px;
             border: 2px solid #e0e0e0;
@@ -275,7 +336,13 @@ if(isset($_POST['register'])){
             background-color: #f8f9fa;
         }
 
-        .input-wrapper input:focus {
+        .input-wrapper select {
+            appearance: none;
+            cursor: pointer;
+        }
+
+        .input-wrapper input:focus,
+        .input-wrapper select:focus {
             border-color: #0B4F2E;
             background-color: #ffffff;
             outline: none;
@@ -294,6 +361,7 @@ if(isset($_POST['register'])){
             transform: translateY(-50%);
             color: #666;
             opacity: 0.5;
+            pointer-events: none;
         }
 
         .toggle-password {
@@ -363,6 +431,24 @@ if(isset($_POST['register'])){
 
         .form-hint i {
             color: #0B4F2E;
+        }
+
+        .info-box {
+            background: #e8f4f8;
+            border-left: 4px solid #17a2b8;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-size: 13px;
+            color: #0c5460;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .info-box i {
+            font-size: 20px;
+            color: #17a2b8;
         }
 
         .terms {
@@ -464,9 +550,15 @@ if(isset($_POST['register'])){
         }
 
         /* Responsive */
-        @media (max-width: 480px) {
+        @media (max-width: 600px) {
             .register-container {
                 padding: 30px 20px;
+            }
+
+            .form-row,
+            .form-row-2 {
+                grid-template-columns: 1fr;
+                gap: 0;
             }
 
             .logo-section h1 {
@@ -478,6 +570,8 @@ if(isset($_POST['register'])){
             }
         }
     </style>
+    <!-- Flatpickr JS -->
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 </head>
 <body>
     <!-- Floating background shapes -->
@@ -511,12 +605,62 @@ if(isset($_POST['register'])){
         <?php endif; ?>
 
         <form method="POST" action="" id="registerForm">
-            <div class="form-group">
-                <label for="fullname">Full Name <span>*</span></label>
-                <div class="input-wrapper">
-                    <input type="text" id="fullname" name="fullname" placeholder="Enter your full name" 
-                           value="<?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : ''; ?>" required>
-                    <i class="fas fa-user input-icon"></i>
+            <!-- Name Fields - 3 columns -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="firstname">First Name <span>*</span></label>
+                    <div class="input-wrapper">
+                        <input type="text" id="firstname" name="firstname" placeholder="First name" 
+                               value="<?php echo isset($_POST['firstname']) ? htmlspecialchars($_POST['firstname']) : ''; ?>" required>
+                        <i class="fas fa-user input-icon"></i>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="middlename">Middle Initial</label>
+                    <div class="input-wrapper">
+                        <input type="text" id="middlename" name="middlename" placeholder="Middle initial" maxlength="2"
+                               value="<?php echo isset($_POST['middlename']) ? htmlspecialchars($_POST['middlename']) : ''; ?>">
+                        <i class="fas fa-user input-icon"></i>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="lastname">Last Name <span>*</span></label>
+                    <div class="input-wrapper">
+                        <input type="text" id="lastname" name="lastname" placeholder="Last name" 
+                               value="<?php echo isset($_POST['lastname']) ? htmlspecialchars($_POST['lastname']) : ''; ?>" required>
+                        <i class="fas fa-user input-icon"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Birthdate and Gender - 2 columns -->
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label for="birthdate">Birthdate <span>*</span></label>
+                    <div class="input-wrapper">
+                        <input type="text" id="birthdate" name="birthdate" placeholder="Select birthdate" 
+                               value="<?php echo isset($_POST['birthdate']) ? htmlspecialchars($_POST['birthdate']) : ''; ?>" required>
+                        <i class="fas fa-calendar input-icon"></i>
+                    </div>
+                    <div class="form-hint">
+                        <i class="fas fa-info-circle"></i>
+                        Must be 15-30 years old
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="gender">Gender <span>*</span></label>
+                    <div class="input-wrapper">
+                        <select id="gender" name="gender" required>
+                            <option value="">Select gender</option>
+                            <option value="Male" <?php echo (isset($_POST['gender']) && $_POST['gender'] == 'Male') ? 'selected' : ''; ?>>Male</option>
+                            <option value="Female" <?php echo (isset($_POST['gender']) && $_POST['gender'] == 'Female') ? 'selected' : ''; ?>>Female</option>
+                            <option value="Other" <?php echo (isset($_POST['gender']) && $_POST['gender'] == 'Other') ? 'selected' : ''; ?>>Other</option>
+                        </select>
+                        <i class="fas fa-chevron-down input-icon"></i>
+                    </div>
                 </div>
             </div>
 
@@ -542,32 +686,41 @@ if(isset($_POST['register'])){
                 </div>
             </div>
 
-            <div class="form-group">
-                <label for="password">Password <span>*</span></label>
-                <div class="input-wrapper">
-                    <input type="password" id="password" name="password" placeholder="Create a password" required>
-                    <button type="button" class="toggle-password" onclick="togglePassword()">
-                        <i class="fas fa-eye"></i>
-                    </button>
+            <div class="form-row-2">
+                <div class="form-group">
+                    <label for="password">Password <span>*</span></label>
+                    <div class="input-wrapper">
+                        <input type="password" id="password" name="password" placeholder="Create a password" required>
+                        <button type="button" class="toggle-password" onclick="togglePassword()">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="password-strength">
+                        <div class="strength-bar" id="strengthBar"></div>
+                    </div>
+                    <div class="strength-text" id="strengthText">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Enter password (min. 6 characters)</span>
+                    </div>
                 </div>
-                <div class="password-strength">
-                    <div class="strength-bar" id="strengthBar"></div>
-                </div>
-                <div class="strength-text" id="strengthText">
-                    <i class="fas fa-info-circle"></i>
-                    <span>Enter password (min. 6 characters)</span>
+
+                <div class="form-group">
+                    <label for="confirm_password">Confirm Password <span>*</span></label>
+                    <div class="input-wrapper">
+                        <input type="password" id="confirm_password" name="confirm_password" placeholder="Confirm your password" required>
+                        <i class="fas fa-lock input-icon"></i>
+                    </div>
+                    <div class="strength-text" id="passwordMatch">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Re-enter your password</span>
+                    </div>
                 </div>
             </div>
 
-            <div class="form-group">
-                <label for="confirm_password">Confirm Password <span>*</span></label>
-                <div class="input-wrapper">
-                    <input type="password" id="confirm_password" name="confirm_password" placeholder="Confirm your password" required>
-                    <i class="fas fa-lock input-icon"></i>
-                </div>
-                <div class="strength-text" id="passwordMatch">
-                    <i class="fas fa-info-circle"></i>
-                    <span>Re-enter your password</span>
+            <div class="info-box">
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <strong>Note:</strong> After registration, your account will be pending approval from the administrator. You will be able to login once your account is approved.
                 </div>
             </div>
 
@@ -592,6 +745,38 @@ if(isset($_POST['register'])){
     </div>
 
     <script>
+        // Initialize date picker
+        flatpickr("#birthdate", {
+            maxDate: "today",
+            minDate: "1993-01-01", // 30 years ago from current year (adjust as needed)
+            dateFormat: "Y-m-d",
+            altInput: true,
+            altFormat: "F j, Y",
+            placeholder: "Select birthdate",
+            onChange: function(selectedDates, dateStr, instance) {
+                validateAge(dateStr);
+            }
+        });
+
+        // Age validation function
+        function validateAge(birthdate) {
+            const birthDate = new Date(birthdate);
+            const today = new Date();
+            let age = today.getFullYear() - birthDate.getFullYear();
+            const monthDiff = today.getMonth() - birthDate.getMonth();
+            
+            if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+                age--;
+            }
+            
+            const ageWarning = document.getElementById('birthdate').nextElementSibling;
+            if (age < 15) {
+                showNotification('You must be at least 15 years old to register', 'error');
+            } else if (age > 30) {
+                showNotification('Age exceeds maximum allowed (30 years)', 'error');
+            }
+        }
+
         // Toggle password visibility
         function togglePassword() {
             const passwordInput = document.getElementById('password');
@@ -673,19 +858,57 @@ if(isset($_POST['register'])){
         document.getElementById('registerForm').addEventListener('submit', function(e) {
             const password = document.getElementById('password').value;
             const confirm = document.getElementById('confirm_password').value;
+            const birthdate = document.getElementById('birthdate').value;
             
             if (password.length < 6) {
                 e.preventDefault();
-                alert('Password must be at least 6 characters long');
+                showNotification('Password must be at least 6 characters long', 'error');
                 return;
             }
             
             if (password !== confirm) {
                 e.preventDefault();
-                alert('Passwords do not match!');
+                showNotification('Passwords do not match!', 'error');
                 return;
             }
+
+            // Validate age again on submit
+            if (birthdate) {
+                const birthDate = new Date(birthdate);
+                const today = new Date();
+                let age = today.getFullYear() - birthDate.getFullYear();
+                const monthDiff = today.getMonth() - birthDate.getMonth();
+                
+                if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+                    age--;
+                }
+                
+                if (age < 15) {
+                    e.preventDefault();
+                    showNotification('You must be at least 15 years old to register', 'error');
+                    return;
+                } else if (age > 30) {
+                    e.preventDefault();
+                    showNotification('Age exceeds maximum allowed (30 years)', 'error');
+                    return;
+                }
+            }
         });
+
+        // Show notification function
+        function showNotification(message, type) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.innerHTML = `<i class="fas fa-${type === 'error' ? 'exclamation-circle' : 'check-circle'}"></i>${message}`;
+            
+            const container = document.querySelector('.register-container');
+            const form = document.getElementById('registerForm');
+            container.insertBefore(alertDiv, form);
+            
+            setTimeout(() => {
+                alertDiv.remove();
+            }, 5000);
+        }
 
         // Real-time email validation
         document.getElementById('email').addEventListener('blur', function() {
@@ -704,6 +927,11 @@ if(isset($_POST['register'])){
         document.getElementById('email').addEventListener('focus', function() {
             this.style.borderColor = '#e2e8f0';
             this.classList.remove('error');
+        });
+
+        // Auto-uppercase middle initial
+        document.getElementById('middlename').addEventListener('input', function() {
+            this.value = this.value.toUpperCase();
         });
     </script>
 </body>

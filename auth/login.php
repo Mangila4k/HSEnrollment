@@ -2,34 +2,127 @@
 session_start();
 include("../config/database.php");
 
+// Check if connection exists
+if (!$conn) {
+    die("Database connection failed. Please check your configuration.");
+}
+
+$error = '';
+
 if(isset($_POST['login'])){
     $email = $_POST['email'];
     $password = $_POST['password'];
 
-    $sql = "SELECT * FROM users WHERE email='$email'";
-    $result = $conn->query($sql);
-
-    if($result->num_rows > 0){
-        $user = $result->fetch_assoc();
+    // Use prepared statement to prevent SQL injection
+    $sql = "SELECT * FROM users WHERE email = :email";
+    $stmt = $conn->prepare($sql);
+    $stmt->bindParam(':email', $email, PDO::PARAM_STR);
+    $stmt->execute();
+    
+    if($stmt->rowCount() > 0){
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         if(password_verify($password, $user['password'])){
-            $_SESSION['user'] = $user;
-
-            // Redirect based on role
-            switch($user['role']){
-                case 'Admin':
-                    header("Location: ../admin/dashboard.php");
-                    break;
-                case 'Registrar':
-                    header("Location: ../registrar/enrollments.php");
-                    break;
-                case 'Teacher':
-                    header("Location: ../teacher/dashboard.php");
-                    break;
-                case 'Student':
-                    header("Location: ../student/dashboard.php");
-                    break;
+            
+            // Check user status
+            if($user['status'] == 'pending') {
+                $error = "Your account is pending approval from the administrator. Please wait for approval.";
+            } elseif($user['status'] == 'rejected') {
+                $reason = isset($user['rejection_reason']) ? " Reason: " . $user['rejection_reason'] : "";
+                $error = "Your account has been rejected." . $reason . " Please contact the administrator for more information.";
+            } elseif($user['status'] == 'approved') {
+                
+                // Check if 2FA is enabled for this user (only for Admin and Registrar)
+                if(($user['role'] == 'Admin' || $user['role'] == 'Registrar') && $user['two_factor_enabled'] == 1) {
+                    // Generate 6-digit code
+                    $code = sprintf("%06d", mt_rand(1, 999999));
+                    
+                    // Store in session with expiration (5 minutes)
+                    $_SESSION['2fa_user_id'] = $user['id'];
+                    $_SESSION['2fa_code'] = $code;
+                    $_SESSION['2fa_expires'] = time() + 300; // 5 minutes
+                    $_SESSION['2fa_email'] = $user['email'];
+                    $_SESSION['2fa_name'] = $user['fullname'];
+                    
+                    // Send email with code
+                    $to = $user['email'];
+                    $subject = "Your 2FA Verification Code - PNHS";
+                    
+                    $message = "
+                    <html>
+                    <head>
+                        <title>2FA Verification Code</title>
+                    </head>
+                    <body style='font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;'>
+                        <div style='max-width: 600px; margin: 20px auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 5px 15px rgba(0,0,0,0.1);'>
+                            <div style='background: linear-gradient(135deg, #0B4F2E, #1a7a42); padding: 30px; text-align: center;'>
+                                <h1 style='color: white; margin: 0; font-size: 28px;'>PNHS</h1>
+                                <p style='color: #FFD700; margin: 5px 0 0; font-size: 16px;'>Two-Factor Authentication</p>
+                            </div>
+                            
+                            <div style='padding: 30px;'>
+                                <p style='font-size: 16px; color: #333;'>Hello <strong>" . $user['fullname'] . "</strong>,</p>
+                                <p style='font-size: 16px; color: #333;'>You have requested to log in to your account. Please use the following verification code:</p>
+                                
+                                <div style='background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; margin: 25px 0; border: 2px dashed #0B4F2E;'>
+                                    <div style='font-size: 42px; font-weight: bold; color: #0B4F2E; letter-spacing: 8px; font-family: monospace;'>
+                                        " . $code . "
+                                    </div>
+                                    <p style='color: #666; margin-top: 10px;'>This code will expire in 5 minutes</p>
+                                </div>
+                                
+                                <div style='background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;'>
+                                    <p style='color: #856404; margin: 0; font-size: 14px;'>
+                                        <strong>⚠️ Security Notice:</strong> Never share this code with anyone. Our staff will never ask for your verification code.
+                                    </p>
+                                </div>
+                                
+                                <p style='color: #666; font-size: 14px; margin-top: 25px;'>If you didn't attempt to log in, please ignore this email and contact the administrator immediately.</p>
+                            </div>
+                            
+                            <div style='background: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #e0e0e0;'>
+                                <p style='color: #999; font-size: 12px; margin: 0;'>&copy; " . date('Y') . " Placido L. Señor Senior High School. All rights reserved.</p>
+                                <p style='color: #999; font-size: 12px; margin: 5px 0 0;'>Langtad, City of Naga, Cebu</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>
+                    ";
+                    
+                    $headers = "MIME-Version: 1.0" . "\r\n";
+                    $headers .= "Content-type:text/html;charset=UTF-8" . "\r\n";
+                    $headers .= "From: PNHS 2FA <noreply@plsshs.edu.ph>" . "\r\n";
+                    
+                    if(mail($to, $subject, $message, $headers)) {
+                        header("Location: verify_2fa.php");
+                        exit();
+                    } else {
+                        $error = "Failed to send verification code. Please try again.";
+                    }
+                } else {
+                    // Normal login without 2FA
+                    $_SESSION['user'] = $user;
+                    
+                    // Redirect based on role
+                    switch($user['role']){
+                        case 'Admin':
+                            header("Location: ../admin/dashboard.php");
+                            break;
+                        case 'Registrar':
+                            header("Location: ../registrar/enrollments.php");
+                            break;
+                        case 'Teacher':
+                            header("Location: ../teacher/dashboard.php");
+                            break;
+                        case 'Student':
+                            header("Location: ../student/dashboard.php");
+                            break;
+                    }
+                    exit();
+                }
+            } else {
+                $error = "Account status unknown. Please contact administrator.";
             }
-            exit();
         } else {
             $error = "Incorrect password!";
         }
@@ -45,6 +138,8 @@ if(isset($_POST['login'])){
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login - Placido L. Señor Senior High School</title>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -85,7 +180,6 @@ if(isset($_POST['login'])){
             }
         }
 
-        /* Left Panel - Login Form */
         .login-panel {
             flex: 1;
             padding: 50px 40px;
@@ -230,7 +324,6 @@ if(isset($_POST['login'])){
             text-decoration: underline;
         }
 
-        /* Right Panel - High School Programs */
         .info-panel {
             flex: 1;
             background: linear-gradient(135deg, #0B4F2E, #1a7a42);
@@ -338,6 +431,9 @@ if(isset($_POST['login'])){
             margin-bottom: 20px;
             font-size: 14px;
             border-left: 4px solid #dc2626;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
         .success-message {
@@ -398,15 +494,15 @@ if(isset($_POST['login'])){
             <h2>Login to your Account</h2>
             <p class="subtitle">Enter your credentials to access the system</p>
             
-            <?php if(isset($error)): ?>
+            <?php if(!empty($error)): ?>
                 <div class="error-message">
-                    ⚠️ <?php echo $error; ?>
+                    <i class="fas fa-exclamation-circle"></i> <?php echo $error; ?>
                 </div>
             <?php endif; ?>
             
             <?php if(isset($_GET['registered'])): ?>
                 <div class="success-message">
-                    ✅ Registration successful! Please login.
+                    <i class="fas fa-check-circle"></i> Registration successful! Please wait for admin approval.
                 </div>
             <?php endif; ?>
 
@@ -470,5 +566,8 @@ if(isset($_POST['login'])){
             </div>
         </div>
     </div>
+    
+    <!-- Font Awesome -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
 </body>
 </html>

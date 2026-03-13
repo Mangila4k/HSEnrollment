@@ -32,14 +32,14 @@ $enrollment_query = "
     JOIN grade_levels g ON e.grade_id = g.id
     LEFT JOIN sections s ON e.section_id = s.id
     LEFT JOIN users u ON s.adviser_id = u.id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    WHERE e.student_id = :student_id AND e.status = 'Enrolled'
     ORDER BY e.created_at DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Check if student has a section
 $has_section = ($enrollment && isset($enrollment['section_id']) && $enrollment['section_id']);
@@ -49,7 +49,7 @@ $strand = $enrollment ? ($enrollment['strand'] ?? 'N/A') : 'N/A';
 $adviser_name = $enrollment ? ($enrollment['adviser_name'] ?? 'Not Assigned') : 'Not Assigned';
 $school_year = $enrollment ? $enrollment['school_year'] : date('Y') . '-' . (date('Y') + 1);
 
-// Get class schedule for student's section - FIXED: Removed subject_code
+// Get class schedule for student's section
 $schedule = null;
 $weekly_schedule = [];
 if($has_section) {
@@ -68,17 +68,16 @@ if($has_section) {
         JOIN users u ON cs.teacher_id = u.id
         JOIN days_of_week d ON cs.day_id = d.id
         JOIN time_slots ts ON cs.time_slot_id = ts.id
-        WHERE cs.section_id = ? AND cs.status = 'active'
+        WHERE cs.section_id = :section_id AND cs.status = 'active'
         ORDER BY d.day_order, ts.start_time
     ";
     
     $stmt = $conn->prepare($schedule_query);
-    $stmt->bind_param("i", $enrollment['section_id']);
+    $stmt->bindParam(':section_id', $enrollment['section_id'], PDO::PARAM_INT);
     $stmt->execute();
-    $schedule_result = $stmt->get_result();
     
     // Organize schedule by day
-    while($class = $schedule_result->fetch_assoc()) {
+    while($class = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $day = $class['day_name'];
         $time_slot_id = $class['time_slot_id'];
         
@@ -96,7 +95,7 @@ if($has_section) {
             'end_time' => $class['end_time']
         ];
     }
-    $stmt->close();
+    $stmt = null;
 }
 
 // Get subjects for student's grade level (fallback if no schedule)
@@ -104,25 +103,25 @@ $subjects_list = [];
 if($grade_id = ($enrollment ? $enrollment['grade_id'] : null)) {
     $subjects_query = "
         SELECT * FROM subjects 
-        WHERE grade_id = ? 
+        WHERE grade_id = :grade_id 
         ORDER BY subject_name
     ";
     $stmt = $conn->prepare($subjects_query);
-    $stmt->bind_param("i", $grade_id);
+    $stmt->bindParam(':grade_id', $grade_id, PDO::PARAM_INT);
     $stmt->execute();
-    $subjects = $stmt->get_result();
-    while($subject = $subjects->fetch_assoc()) {
+    
+    while($subject = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $subjects_list[] = $subject;
     }
-    $stmt->close();
+    $stmt = null;
 }
 
 // Get all time slots
 $time_slots = [];
 $time_slots_query = "SELECT * FROM time_slots ORDER BY start_time";
 $time_slots_result = $conn->query($time_slots_query);
-if($time_slots_result && $time_slots_result->num_rows > 0) {
-    while($slot = $time_slots_result->fetch_assoc()) {
+if($time_slots_result) {
+    while($slot = $time_slots_result->fetch(PDO::FETCH_ASSOC)) {
         $time_slots[$slot['id']] = [
             'time' => date('h:i A', strtotime($slot['start_time'])) . ' - ' . date('h:i A', strtotime($slot['end_time'])),
             'start' => $slot['start_time'],
@@ -1257,6 +1256,5 @@ $today_classes = isset($weekly_schedule[$today_name]) ? $weekly_schedule[$today_
             });
         });
     </script>
-    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

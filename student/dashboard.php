@@ -8,8 +8,18 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Student'){
     exit();
 }
 
+// Add this line to include the classifier
+require_once '../includes/StudentClassifier.php';
+$classifier = new StudentClassifier($conn);
+
 $student_id = $_SESSION['user']['id'];
 $student_name = $_SESSION['user']['fullname'];
+
+// Get student classification
+$student_info = $classifier->getStudentClassification($student_id);
+$student_type = $classifier->getStudentTypeBadge($student_id);
+$enrollment_history = $classifier->getEnrollmentHistory($student_id);
+
 $success_message = '';
 $error_message = '';
 
@@ -24,15 +34,16 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get enrollment status
-$enrollment = $conn->query("SELECT e.*, g.grade_name 
-                           FROM enrollments e 
-                           LEFT JOIN grade_levels g ON e.grade_id = g.id 
-                           WHERE e.student_id = '$student_id' 
-                           ORDER BY e.id DESC LIMIT 1")->fetch_assoc();
+// Get enrollment status - FIXED: Changed fetch_assoc() to fetch(PDO::FETCH_ASSOC)
+$enrollment_query = $conn->query("SELECT e.*, g.grade_name 
+                                  FROM enrollments e 
+                                  LEFT JOIN grade_levels g ON e.grade_id = g.id 
+                                  WHERE e.student_id = '$student_id' 
+                                  ORDER BY e.id DESC LIMIT 1");
+$enrollment = $enrollment_query ? $enrollment_query->fetch(PDO::FETCH_ASSOC) : null;
 
-// Get recent activities
-$recent_activities = $conn->query("
+// Get recent activities - FIXED: Changed fetch_assoc() to fetch(PDO::FETCH_ASSOC)
+$recent_activities_query = $conn->query("
     SELECT 'enrollment' as type, status, id as reference_id, school_year as reference, created_at 
     FROM enrollments 
     WHERE student_id = '$student_id' 
@@ -40,7 +51,7 @@ $recent_activities = $conn->query("
     LIMIT 5
 ");
 
-// Get attendance statistics
+// Get attendance statistics - FIXED: Changed fetch_assoc() to fetch(PDO::FETCH_ASSOC)
 $attendance_stats = [
     'present' => 0,
     'absent' => 0,
@@ -56,7 +67,7 @@ $attendance_query = "
 ";
 $attendance_result = $conn->query($attendance_query);
 if($attendance_result) {
-    while($row = $attendance_result->fetch_assoc()) {
+    while($row = $attendance_result->fetch(PDO::FETCH_ASSOC)) {
         $attendance_stats[strtolower($row['status'])] = $row['count'];
         $attendance_stats['total'] += $row['count'];
     }
@@ -66,17 +77,17 @@ $attendance_rate = $attendance_stats['total'] > 0
     ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
     : 0;
 
-// Get subjects count
+// Get subjects count - FIXED: Changed fetch_assoc() to fetch(PDO::FETCH_ASSOC)
 $subjects_count = 0;
 if($enrollment && isset($enrollment['grade_id'])) {
     $subjects_result = $conn->query("SELECT COUNT(*) as count FROM subjects WHERE grade_id = '{$enrollment['grade_id']}'");
     if($subjects_result) {
-        $subjects_count = $subjects_result->fetch_assoc()['count'];
+        $row = $subjects_result->fetch(PDO::FETCH_ASSOC);
+        $subjects_count = $row['count'] ?? 0;
     }
 }
 
-// FIXED: Removed the grades table query since it doesn't exist
-$average_grade = '--'; // Placeholder value
+$average_grade = '--';
 ?>
 
 <!DOCTYPE html>
@@ -351,7 +362,7 @@ $average_grade = '--'; // Placeholder value
         /* Stats Cards */
         .stats-container {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(5, 1fr);
             gap: 25px;
             margin-bottom: 30px;
         }
@@ -402,7 +413,6 @@ $average_grade = '--'; // Placeholder value
         .stat-icon {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -943,7 +953,7 @@ $average_grade = '--'; // Placeholder value
         /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: repeat(3, 1fr);
             }
         }
 
@@ -1039,6 +1049,7 @@ $average_grade = '--'; // Placeholder value
                     <li><a href="schedule.php"><i class="fas fa-calendar-alt"></i> <span>Class Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>My Grades</span></a></li>
                     <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="enrollment_history.php"><i class="fas fa-history"></i> <span>Enrollment History</span></a></li>
                 </ul>
             </div>
 
@@ -1079,7 +1090,7 @@ $average_grade = '--'; // Placeholder value
                 <div class="stat-card" onclick="window.location.href='enrollment.php'">
                     <div class="stat-header">
                         <h3>Enrollment Status</h3>
-                        <div class="stat-icon">
+                        <div class="stat-icon" style="background: linear-gradient(135deg, #0B4F2E, #1a7a42);">
                             <i class="fas fa-graduation-cap"></i>
                         </div>
                     </div>
@@ -1098,7 +1109,7 @@ $average_grade = '--'; // Placeholder value
                 <div class="stat-card" onclick="window.location.href='subjects.php'">
                     <div class="stat-header">
                         <h3>Subjects</h3>
-                        <div class="stat-icon">
+                        <div class="stat-icon" style="background: linear-gradient(135deg, #0B4F2E, #1a7a42);">
                             <i class="fas fa-book"></i>
                         </div>
                     </div>
@@ -1109,7 +1120,7 @@ $average_grade = '--'; // Placeholder value
                 <div class="stat-card" onclick="window.location.href='attendance.php'">
                     <div class="stat-header">
                         <h3>Attendance</h3>
-                        <div class="stat-icon">
+                        <div class="stat-icon" style="background: linear-gradient(135deg, #0B4F2E, #1a7a42);">
                             <i class="fas fa-calendar-check"></i>
                         </div>
                     </div>
@@ -1120,12 +1131,34 @@ $average_grade = '--'; // Placeholder value
                 <div class="stat-card" onclick="window.location.href='grades.php'">
                     <div class="stat-header">
                         <h3>Average Grade</h3>
-                        <div class="stat-icon">
+                        <div class="stat-icon" style="background: linear-gradient(135deg, #0B4F2E, #1a7a42);">
                             <i class="fas fa-star"></i>
                         </div>
                     </div>
                     <div class="stat-number"><?php echo $average_grade; ?></div>
                     <div class="stat-label">Overall Average</div>
+                </div>
+
+                <!-- New Student Type Card -->
+                <div class="stat-card" onclick="window.location.href='enrollment_history.php'">
+                    <div class="stat-header">
+                        <h3>Student Type</h3>
+                        <div class="stat-icon" style="background: <?php echo $student_type['color']; ?>">
+                            <i class="fas <?php echo $student_type['type'] == 'Old Student' ? 'fa-undo-alt' : 'fa-star'; ?>"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number" style="font-size: 24px;"><?php echo $student_type['type']; ?></div>
+                    <div class="stat-label">
+                        <?php if(count($enrollment_history) > 0): ?>
+                            <i class="fas fa-calendar"></i> 
+                            <?php 
+                            $first_enrollment = end($enrollment_history);
+                            echo 'Since ' . ($first_enrollment['school_year'] ?? date('Y'));
+                            ?>
+                        <?php else: ?>
+                            First time student
+                        <?php endif; ?>
+                    </div>
                 </div>
             </div>
 
@@ -1182,13 +1215,13 @@ $average_grade = '--'; // Placeholder value
             <div class="activity-card">
                 <div class="activity-header">
                     <h3><i class="fas fa-file-signature"></i> Enrollment History</h3>
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
+                    <?php if($recent_activities_query && $recent_activities_query->rowCount() > 0): ?>
                         <span class="stat-label">Last 5 records</span>
                     <?php endif; ?>
                 </div>
                 <div class="activity-list">
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
-                        <?php while($activity = $recent_activities->fetch_assoc()): ?>
+                    <?php if($recent_activities_query && $recent_activities_query->rowCount() > 0): ?>
+                        <?php while($activity = $recent_activities_query->fetch(PDO::FETCH_ASSOC)): ?>
                             <div class="activity-item">
                                 <div class="activity-dot 
                                     <?php 
@@ -1229,6 +1262,58 @@ $average_grade = '--'; // Placeholder value
                     <?php endif; ?>
                 </div>
             </div>
+
+            <!-- Complete Enrollment History Section -->
+            <?php if(!empty($enrollment_history)): ?>
+            <div class="section-title">
+                <h2><i class="fas fa-history"></i> Complete Enrollment History</h2>
+            </div>
+
+            <div class="activity-card">
+                <div class="activity-header">
+                    <h3><i class="fas fa-file-signature"></i> All Enrollments</h3>
+                    <span class="stat-label">Total: <?php echo count($enrollment_history); ?> enrollments</span>
+                </div>
+                <div class="activity-list">
+                    <?php foreach($enrollment_history as $index => $enrollment): ?>
+                        <div class="activity-item">
+                            <div class="activity-dot 
+                                <?php 
+                                    if($enrollment['status'] == 'Pending') echo 'dot-pending';
+                                    else if($enrollment['status'] == 'Enrolled') echo 'dot-approved';
+                                    else echo 'dot-completed';
+                                ?>">
+                            </div>
+                            <div class="activity-content">
+                                <div class="activity-title">
+                                    <strong>School Year <?php echo htmlspecialchars($enrollment['school_year']); ?></strong>
+                                    <?php if($index == 0): ?>
+                                        <span style="margin-left: 10px; font-size: 11px; background: <?php echo $student_type['color']; ?>; color: white; padding: 2px 8px; border-radius: 12px;">Current</span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="activity-time">
+                                    <i class="fas fa-layer-group"></i> Grade: <?php echo htmlspecialchars($enrollment['grade_name'] ?? 'N/A'); ?>
+                                    <?php if($enrollment['section_name']): ?>
+                                        - Section: <?php echo htmlspecialchars($enrollment['section_name']); ?>
+                                    <?php endif; ?>
+                                    <?php if($enrollment['strand']): ?>
+                                        <br><i class="fas fa-tag"></i> Strand: <?php echo htmlspecialchars($enrollment['strand']); ?>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                            <div class="activity-status 
+                                <?php 
+                                    if($enrollment['status'] == 'Pending') echo 'status-pending';
+                                    else if($enrollment['status'] == 'Enrolled') echo 'status-approved';
+                                    else echo 'status-rejected';
+                                ?>">
+                                <?php echo $enrollment['status']; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
 
             <!-- School Information -->
             <div class="school-info">
