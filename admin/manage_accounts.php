@@ -9,6 +9,7 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
 }
 
 $admin_name = $_SESSION['user']['fullname'];
+$admin_id = $_SESSION['user']['id'];
 $success_message = '';
 $error_message = '';
 
@@ -23,12 +24,21 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
+<<<<<<< HEAD
 // Handle approval from manage_accounts page
 if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
     $approve_id = $_GET['approve'];
     
     $stmt = $conn->prepare("UPDATE users SET is_approved = 1 WHERE id = ?");
     $stmt->bind_param("i", $approve_id);
+=======
+// Handle user approval
+if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
+    $user_id = $_GET['approve'];
+    
+    $stmt = $conn->prepare("UPDATE users SET status = 'approved', approved_by = ?, approved_at = NOW() WHERE id = ?");
+    $stmt->bind_param("ii", $admin_id, $user_id);
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
     if($stmt->execute()) {
         $success_message = "User approved successfully!";
     } else {
@@ -37,6 +47,7 @@ if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
     $stmt->close();
 }
 
+<<<<<<< HEAD
 // Handle rejection (delete)
 if(isset($_GET['reject']) && is_numeric($_GET['reject'])) {
     $reject_id = $_GET['reject'];
@@ -45,6 +56,17 @@ if(isset($_GET['reject']) && is_numeric($_GET['reject'])) {
     $stmt->bind_param("i", $reject_id);
     if($stmt->execute()) {
         $success_message = "User rejected and removed successfully!";
+=======
+// Handle user rejection
+if(isset($_POST['reject_user'])) {
+    $user_id = $_POST['user_id'];
+    $reason = mysqli_real_escape_string($conn, $_POST['rejection_reason']);
+    
+    $stmt = $conn->prepare("UPDATE users SET status = 'rejected', rejection_reason = ?, approved_by = ?, approved_at = NOW() WHERE id = ?");
+    $stmt->bind_param("sii", $reason, $admin_id, $user_id);
+    if($stmt->execute()) {
+        $success_message = "User rejected successfully!";
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
     } else {
         $error_message = "Error rejecting user: " . $conn->error;
     }
@@ -62,8 +84,10 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         $check_enrollments = $conn->query("SELECT id FROM enrollments WHERE student_id = '$delete_id'");
         $check_attendance = $conn->query("SELECT id FROM attendance WHERE student_id = '$delete_id'");
         $check_sections = $conn->query("SELECT id FROM sections WHERE adviser_id = '$delete_id'");
+        $check_teacher_attendance = $conn->query("SELECT id FROM teacher_attendance WHERE teacher_id = '$delete_id'");
         
-        if($check_enrollments->num_rows > 0 || $check_attendance->num_rows > 0 || $check_sections->num_rows > 0) {
+        if($check_enrollments->num_rows > 0 || $check_attendance->num_rows > 0 || 
+           $check_sections->num_rows > 0 || $check_teacher_attendance->num_rows > 0) {
             $error_message = "Cannot delete user because they have related records (enrollments, attendance, or sections).";
         } else {
             $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
@@ -80,8 +104,9 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     }
 }
 
-// Handle role filter
+// Handle role filter and search
 $role_filter = isset($_GET['role']) ? $_GET['role'] : '';
+$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search = isset($_GET['search']) ? $_GET['search'] : '';
 
 // Get pending accounts count
@@ -104,6 +129,12 @@ if(!empty($role_filter)) {
     $types .= "s";
 }
 
+if(!empty($status_filter)) {
+    $query .= " AND status = ?";
+    $params[] = $status_filter;
+    $types .= "s";
+}
+
 if(!empty($search)) {
     $query .= " AND (fullname LIKE ? OR email LIKE ? OR id_number LIKE ?)";
     $search_term = "%$search%";
@@ -113,7 +144,13 @@ if(!empty($search)) {
     $types .= "sss";
 }
 
-$query .= " ORDER BY created_at DESC";
+$query .= " ORDER BY 
+    CASE status 
+        WHEN 'pending' THEN 1 
+        WHEN 'approved' THEN 2 
+        WHEN 'rejected' THEN 3 
+    END, 
+    created_at DESC";
 
 // Prepare and execute
 $stmt = $conn->prepare($query);
@@ -123,13 +160,22 @@ if(!empty($params)) {
 $stmt->execute();
 $users = $stmt->get_result();
 
+<<<<<<< HEAD
 // Get counts by role (approved users only)
+=======
+// Get counts by role and status
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
 $counts = [];
 $roles = ['Admin', 'Registrar', 'Teacher', 'Student'];
 foreach($roles as $role) {
     $result = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = '$role' AND is_approved = 1");
     $counts[$role] = $result->fetch_assoc()['count'];
 }
+
+// Get status counts
+$pending_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'")->fetch_assoc()['count'];
+$approved_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'approved'")->fetch_assoc()['count'];
+$rejected_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'rejected'")->fetch_assoc()['count'];
 
 $total_users = array_sum($counts);
 ?>
@@ -152,18 +198,18 @@ $total_users = array_sum($counts);
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #17a2b8;
         }
 
         body {
@@ -181,7 +227,7 @@ $total_users = array_sum($counts);
         /* Sidebar */
         .sidebar {
             width: 280px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             padding: 30px 20px;
             position: fixed;
@@ -204,7 +250,7 @@ $total_users = array_sum($counts);
         }
 
         .sidebar h2 i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info {
@@ -217,7 +263,7 @@ $total_users = array_sum($counts);
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
+            background: var(--accent);
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -225,14 +271,14 @@ $total_users = array_sum($counts);
             margin: 0 auto 15px;
             font-size: 32px;
             font-weight: bold;
-            color: #0B4F2E;
+            color: var(--primary);
             border: 3px solid white;
         }
 
         .admin-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info p {
@@ -283,12 +329,12 @@ $total_users = array_sum($counts);
         .menu-items a i {
             width: 20px;
             font-size: 1.1em;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .menu-items a.active {
             background: rgba(255, 255, 255, 0.15);
-            border-left: 3px solid #FFD700;
+            border-left: 3px solid var(--accent);
         }
 
         /* Main Content */
@@ -317,7 +363,7 @@ $total_users = array_sum($counts);
 
         /* Welcome Card */
         .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 20px;
             padding: 30px;
             color: white;
@@ -343,7 +389,7 @@ $total_users = array_sum($counts);
         }
 
         .welcome-text p i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .logout-btn {
@@ -390,13 +436,13 @@ $total_users = array_sum($counts);
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
@@ -456,7 +502,7 @@ $total_users = array_sum($counts);
         .stat-icon {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -477,6 +523,7 @@ $total_users = array_sum($counts);
             font-size: 14px;
         }
 
+<<<<<<< HEAD
         /* Pending Section */
         .pending-section {
             background: white;
@@ -611,6 +658,65 @@ $total_users = array_sum($counts);
             font-size: 40px;
             margin-bottom: 10px;
             opacity: 0.3;
+=======
+        /* Status Badges */
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .status-pending {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+            border: 1px solid #ffc107;
+        }
+
+        .status-approved {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid #28a745;
+        }
+
+        .status-rejected {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border: 1px solid #dc3545;
+        }
+
+        /* Role Badges */
+        .role-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .role-badge.admin {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .role-badge.registrar {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .role-badge.teacher {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: white;
+        }
+
+        .role-badge.student {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
         }
 
         /* Section Title */
@@ -633,11 +739,11 @@ $total_users = array_sum($counts);
         }
 
         .section-title h2 i {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .btn-add {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             padding: 12px 25px;
             border-radius: 12px;
@@ -652,7 +758,7 @@ $total_users = array_sum($counts);
         }
 
         .btn-add:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
@@ -685,10 +791,10 @@ $total_users = array_sum($counts);
         }
 
         .search-input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             background: white;
             outline: none;
-            box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
+            box-shadow: 0 0 0 4px var(--primary-light);
         }
 
         .filter-select {
@@ -702,13 +808,13 @@ $total_users = array_sum($counts);
         }
 
         .filter-select:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             outline: none;
             background: white;
         }
 
         .btn-search {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             border: none;
             padding: 12px 25px;
@@ -723,7 +829,7 @@ $total_users = array_sum($counts);
         }
 
         .btn-search:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
@@ -745,8 +851,8 @@ $total_users = array_sum($counts);
         }
 
         .btn-reset:hover {
-            border-color: #0B4F2E;
-            color: #0B4F2E;
+            border-color: var(--primary);
+            color: var(--primary);
         }
 
         /* Table Container */
@@ -789,45 +895,22 @@ $total_users = array_sum($counts);
             background: var(--hover-color);
         }
 
-        /* Role Badges */
-        .role-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
+        .id-badge {
+            background: var(--primary-light);
+            color: var(--primary);
+            padding: 3px 8px;
+            border-radius: 12px;
             font-size: 12px;
-            font-weight: 600;
-            display: inline-block;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            font-weight: 500;
         }
 
-        .role-badge.admin {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            color: white;
-        }
-
-        .role-badge.registrar {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            color: white;
-        }
-
-        .role-badge.teacher {
-            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-            color: white;
-        }
-
-        .role-badge.student {
-            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-            color: white;
-        }
-
-        /* Action Buttons */
         .action-btns {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
         }
 
-        .btn-view, .btn-edit, .btn-delete {
+        .btn-view, .btn-edit, .btn-delete, .btn-approve, .btn-reject {
             padding: 8px 12px;
             border-radius: 8px;
             font-size: 12px;
@@ -843,11 +926,11 @@ $total_users = array_sum($counts);
 
         .btn-view {
             background: rgba(11, 79, 46, 0.1);
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .btn-view:hover {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             transform: translateY(-2px);
         }
@@ -865,22 +948,35 @@ $total_users = array_sum($counts);
 
         .btn-delete {
             background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .btn-delete:hover {
-            background: #dc3545;
+            background: var(--danger);
             color: white;
             transform: translateY(-2px);
         }
 
-        .id-badge {
-            background: rgba(11, 79, 46, 0.1);
-            color: #0B4F2E;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
+        .btn-approve {
+            background: rgba(40, 167, 69, 0.1);
+            color: var(--success);
+        }
+
+        .btn-approve:hover {
+            background: var(--success);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .btn-reject {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--danger);
+        }
+
+        .btn-reject:hover {
+            background: var(--danger);
+            color: white;
+            transform: translateY(-2px);
         }
 
         .no-data {
@@ -898,6 +994,94 @@ $total_users = array_sum($counts);
         .no-data h3 {
             color: var(--text-primary);
             margin-bottom: 10px;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 500px;
+        }
+
+        .modal-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+
+        .modal-body {
+            padding: 20px;
+        }
+
+        .modal-body textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            min-height: 100px;
+            font-family: inherit;
+        }
+
+        .modal-footer {
+            padding: 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn-submit {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-cancel {
+            background: #e9ecef;
+            color: var(--text-primary);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
         }
 
         /* Responsive */
@@ -967,6 +1151,7 @@ $total_users = array_sum($counts);
             .action-btns {
                 justify-content: center;
             }
+<<<<<<< HEAD
             
             .data-table td {
                 font-size: 13px;
@@ -990,6 +1175,8 @@ $total_users = array_sum($counts);
                 padding: 4px 8px;
                 font-size: 10px;
             }
+=======
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
         }
     </style>
 </head>
@@ -1044,7 +1231,7 @@ $total_users = array_sum($counts);
             <!-- Header -->
             <div class="dashboard-header">
                 <h1>Account Management</h1>
-                <p>Manage user accounts and roles in the system</p>
+                <p>Manage user accounts, approvals, and roles in the system</p>
             </div>
 
             <!-- Quick Stats -->
@@ -1073,35 +1260,50 @@ $total_users = array_sum($counts);
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Admins</h3>
+                        <h3>Pending Approval</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-user-shield"></i>
+                            <i class="fas fa-clock"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $counts['Admin']; ?></div>
-                    <div class="stat-label">Administrators</div>
+                    <div class="stat-number"><?php echo $pending_count; ?></div>
+                    <div class="stat-label">Awaiting approval</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
+<<<<<<< HEAD
                         <h3>Teachers</h3>
+=======
+                        <h3>Approved</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-chalkboard-teacher"></i>
+                            <i class="fas fa-check-circle"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $counts['Teacher']; ?></div>
-                    <div class="stat-label">Faculty members</div>
+                    <div class="stat-number"><?php echo $approved_count; ?></div>
+                    <div class="stat-label">Active accounts</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Rejected</h3>
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
+                        <div class="stat-icon">
+                            <i class="fas fa-times-circle"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $rejected_count; ?></div>
+                    <div class="stat-label">Rejected accounts</div>
                 </div>
             </div>
 
             <!-- Alert Messages -->
-            <?php if(isset($success_message)): ?>
+            <?php if($success_message): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i> <?php echo $success_message; ?>
                 </div>
             <?php endif; ?>
             
-            <?php if(isset($error_message)): ?>
+            <?php if($error_message): ?>
                 <div class="alert alert-error">
                     <i class="fas fa-exclamation-circle"></i> <?php echo $error_message; ?>
                 </div>
@@ -1189,6 +1391,13 @@ $total_users = array_sum($counts);
                         <option value="Teacher" <?php echo $role_filter == 'Teacher' ? 'selected' : ''; ?>>Teacher</option>
                         <option value="Student" <?php echo $role_filter == 'Student' ? 'selected' : ''; ?>>Student</option>
                     </select>
+
+                    <select name="status" class="filter-select">
+                        <option value="">All Status</option>
+                        <option value="pending" <?php echo $status_filter == 'pending' ? 'selected' : ''; ?>>Pending</option>
+                        <option value="approved" <?php echo $status_filter == 'approved' ? 'selected' : ''; ?>>Approved</option>
+                        <option value="rejected" <?php echo $status_filter == 'rejected' ? 'selected' : ''; ?>>Rejected</option>
+                    </select>
                     
                     <button type="submit" class="btn-search">
                         <i class="fas fa-search"></i> Filter
@@ -1209,6 +1418,7 @@ $total_users = array_sum($counts);
                             <th>Full Name</th>
                             <th>Email</th>
                             <th>Role</th>
+                            <th>Status</th>
                             <th>Created At</th>
                             <th>Actions</th>
                         </tr>
@@ -1228,6 +1438,18 @@ $total_users = array_sum($counts);
                                         </span>
                                     </td>
                                     <td>
+                                        <span class="status-badge status-<?php echo $user['status']; ?>">
+                                            <?php echo ucfirst($user['status']); ?>
+                                            <?php if($user['status'] == 'pending'): ?>
+                                                <i class="fas fa-clock"></i>
+                                            <?php elseif($user['status'] == 'approved'): ?>
+                                                <i class="fas fa-check-circle"></i>
+                                            <?php elseif($user['status'] == 'rejected'): ?>
+                                                <i class="fas fa-times-circle"></i>
+                                            <?php endif; ?>
+                                        </span>
+                                    </td>
+                                    <td>
                                         <span class="activity-time">
                                             <i class="far fa-calendar"></i>
                                             <?php echo date('M d, Y', strtotime($user['created_at'])); ?>
@@ -1235,30 +1457,58 @@ $total_users = array_sum($counts);
                                     </td>
                                     <td>
                                         <div class="action-btns">
-                                            <a href="view_account.php?id=<?php echo $user['id']; ?>" class="btn-view">
-                                                <i class="fas fa-eye"></i> View
+                                            <a href="view_account.php?id=<?php echo $user['id']; ?>" class="btn-view" title="View Details">
+                                                <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="edit_account.php?id=<?php echo $user['id']; ?>" class="btn-edit">
-                                                <i class="fas fa-edit"></i> Edit
-                                            </a>
+                                            
+                                            <?php if($user['status'] == 'pending'): ?>
+                                                <a href="?approve=<?php echo $user['id']; ?>" class="btn-approve" title="Approve User" 
+                                                   onclick="return confirm('Approve this user?')">
+                                                    <i class="fas fa-check"></i> Approve
+                                                </a>
+                                                <button class="btn-reject" title="Reject User" 
+                                                        onclick="openRejectModal(<?php echo $user['id']; ?>, '<?php echo htmlspecialchars($user['fullname']); ?>')">
+                                                    <i class="fas fa-times"></i> Reject
+                                                </button>
+                                            <?php endif; ?>
+                                            
+                                            <?php if($user['role'] != 'Admin'): ?>
+                                                <a href="edit_account.php?id=<?php echo $user['id']; ?>" class="btn-edit" title="Edit">
+                                                    <i class="fas fa-edit"></i>
+                                                </a>
+                                            <?php endif; ?>
+                                            
                                             <?php if($user['id'] != $_SESSION['user']['id']): ?>
                                                 <a href="?delete=<?php echo $user['id']; ?>" 
-                                                   class="btn-delete"
-                                                   onclick="return confirm('Are you sure you want to delete this user?')">
-                                                    <i class="fas fa-trash"></i> Delete
+                                                   class="btn-delete" title="Delete"
+                                                   onclick="return confirm('Are you sure you want to delete this user? This action cannot be undone.')">
+                                                    <i class="fas fa-trash"></i>
                                                 </a>
                                             <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
+                                <?php if(isset($user['rejection_reason']) && $user['rejection_reason']): ?>
+                                <tr style="background: #fff3cd;">
+                                    <td colspan="7" style="padding: 10px 15px; color: #856404;">
+                                        <i class="fas fa-exclamation-triangle"></i> 
+                                        <strong>Rejection Reason:</strong> <?php echo htmlspecialchars($user['rejection_reason']); ?>
+                                    </td>
+                                </tr>
+                                <?php endif; ?>
                             <?php endwhile; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="6">
+                                <td colspan="7">
                                     <div class="no-data">
                                         <i class="fas fa-users"></i>
+<<<<<<< HEAD
                                         <h3>No Approved Users Found</h3>
                                         <p><?php echo $pending_count > 0 ? 'Check the pending approvals section above.' : 'Click the "Add New Account" button to create your first user.'; ?></p>
+=======
+                                        <h3>No Users Found</h3>
+                                        <p>No user accounts match your search criteria.</p>
+>>>>>>> 9619c00 (Old/New student, Fetch enroll)
                                     </div>
                                 </td>
                             </tr>
@@ -1269,7 +1519,49 @@ $total_users = array_sum($counts);
         </div>
     </div>
 
+    <!-- Reject Modal -->
+    <div class="modal" id="rejectModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-exclamation-triangle" style="color: var(--danger);"></i> Reject User</h3>
+                <button class="close-modal" onclick="closeRejectModal()">&times;</button>
+            </div>
+            <form method="POST" action="">
+                <input type="hidden" name="user_id" id="reject_user_id">
+                <div class="modal-body">
+                    <p>You are about to reject <strong id="reject_user_name"></strong>. Please provide a reason for rejection (optional):</p>
+                    <textarea name="rejection_reason" placeholder="Enter rejection reason..."></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeRejectModal()">Cancel</button>
+                    <button type="submit" name="reject_user" class="btn-submit">Reject User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        // Reject Modal Functions
+        function openRejectModal(userId, userName) {
+            document.getElementById('reject_user_id').value = userId;
+            document.getElementById('reject_user_name').textContent = userName;
+            document.getElementById('rejectModal').classList.add('active');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeRejectModal() {
+            document.getElementById('rejectModal').classList.remove('active');
+            document.body.style.overflow = 'auto';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.classList.remove('active');
+                document.body.style.overflow = 'auto';
+            }
+        }
+
         // Auto-hide alerts after 5 seconds
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');
@@ -1283,4 +1575,8 @@ $total_users = array_sum($counts);
     </script>
 </body>
 </html>
-<?php $stmt->close(); ?>
+<?php 
+if(isset($stmt)) {
+    $stmt->close(); 
+}
+?>

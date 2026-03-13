@@ -1,6 +1,7 @@
 <?php
 session_start();
 include("../config/database.php");
+include("../includes/2fa_functions.php");
 
 // Check if user is admin
 if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
@@ -32,6 +33,48 @@ $stmt->execute();
 $result = $stmt->get_result();
 $admin = $result->fetch_assoc();
 $stmt->close();
+
+// Handle 2FA toggle
+if(isset($_POST['toggle_2fa'])) {
+    $action = $_POST['action'];
+    
+    if($action == 'enable') {
+        // Start 2FA verification for enabling
+        $error = start2FAVerification(
+            $admin_id,
+            $admin['email'],
+            $admin['fullname'],
+            'enable_2fa',
+            'profile.php'
+        );
+    } elseif($action == 'disable') {
+        // Start 2FA verification for disabling
+        $error = start2FAVerification(
+            $admin_id,
+            $admin['email'],
+            $admin['fullname'],
+            'disable_2fa',
+            'profile.php'
+        );
+    }
+}
+
+// Handle 2FA verification completion
+if(isset($_SESSION['2fa_verified']) && $_SESSION['2fa_verified'] === true) {
+    if(time() - $_SESSION['2fa_verified_time'] < 600) {
+        // Verification is still valid
+        // The actual enable/disable was handled in verify_2fa.php
+        unset($_SESSION['2fa_verified']);
+        unset($_SESSION['2fa_verified_time']);
+        
+        // Refresh admin data
+        $result = $conn->query("SELECT * FROM users WHERE id = $admin_id");
+        $admin = $result->fetch_assoc();
+    } else {
+        unset($_SESSION['2fa_verified']);
+        unset($_SESSION['2fa_verified_time']);
+    }
+}
 
 // Handle profile update
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -133,21 +176,33 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             $errors[] = "New passwords do not match";
         }
         
-        // If no errors, update password
+        // If no errors, check if 2FA is enabled
         if(empty($errors)) {
-            $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
-            $update_query = "UPDATE users SET password = ? WHERE id = ?";
-            $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $admin_id);
-            
-            if($update_stmt->execute()) {
-                $_SESSION['success_message'] = "Password changed successfully!";
-                header("Location: profile.php");
-                exit();
+            if(is2FAEnabled($conn, $admin_id)) {
+                // Start 2FA verification for password change
+                $error = start2FAVerification(
+                    $admin_id,
+                    $admin['email'],
+                    $admin['fullname'],
+                    'password_change',
+                    'profile.php'
+                );
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                // Proceed with password change without 2FA
+                $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                $update_query = "UPDATE users SET password = ? WHERE id = ?";
+                $update_stmt = $conn->prepare($update_query);
+                $update_stmt->bind_param("si", $hashed_password, $admin_id);
+                
+                if($update_stmt->execute()) {
+                    $_SESSION['success_message'] = "Password changed successfully!";
+                    header("Location: profile.php");
+                    exit();
+                } else {
+                    $errors[] = "Database error: " . $conn->error;
+                }
+                $update_stmt->close();
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -157,11 +212,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
     }
 }
 
-// Get account statistics (without user_logs table)
 $account_created = $admin['created_at'];
-
-// Count total actions by this admin (optional - you can remove if not needed)
-$total_actions = 0; // Placeholder since user_logs doesn't exist
+$two_factor_enabled = $admin['two_factor_enabled'] ?? 0;
+$two_factor_last_used = $admin['two_factor_last_used'] ?? null;
 ?>
 
 <!DOCTYPE html>
@@ -182,18 +235,18 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #17a2b8;
         }
 
         body {
@@ -211,7 +264,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         /* Sidebar */
         .sidebar {
             width: 280px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
             padding: 30px 20px;
             position: fixed;
@@ -234,7 +287,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .sidebar h2 i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info {
@@ -247,7 +300,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
+            background: var(--accent);
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -255,14 +308,14 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
             margin: 0 auto 15px;
             font-size: 32px;
             font-weight: bold;
-            color: #0B4F2E;
+            color: var(--primary);
             border: 3px solid white;
         }
 
         .admin-info h3 {
             font-size: 18px;
             margin-bottom: 5px;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .admin-info p {
@@ -313,12 +366,12 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .menu-items a i {
             width: 20px;
             font-size: 1.1em;
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .menu-items a.active {
             background: rgba(255, 255, 255, 0.15);
-            border-left: 3px solid #FFD700;
+            border-left: 3px solid var(--accent);
         }
 
         /* Main Content */
@@ -347,7 +400,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
 
         /* Welcome Card */
         .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 20px;
             padding: 30px;
             color: white;
@@ -373,7 +426,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .welcome-text p i {
-            color: #FFD700;
+            color: var(--accent);
         }
 
         .logout-btn {
@@ -420,13 +473,13 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
@@ -452,7 +505,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .profile-avatar-large {
             width: 120px;
             height: 120px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -461,7 +514,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
             font-size: 48px;
             font-weight: bold;
             color: white;
-            border: 4px solid #FFD700;
+            border: 4px solid var(--accent);
         }
 
         .profile-name {
@@ -499,7 +552,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .stat-value {
             font-size: 24px;
             font-weight: 700;
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .stat-label {
@@ -524,12 +577,12 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .info-icon {
             width: 40px;
             height: 40px;
-            background: rgba(11, 79, 46, 0.1);
+            background: var(--primary-light);
             border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: #0B4F2E;
+            color: var(--primary);
             font-size: 18px;
         }
 
@@ -547,6 +600,120 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
             font-size: 15px;
             font-weight: 500;
             color: var(--text-primary);
+        }
+
+        /* 2FA Section */
+        .twofa-section {
+            background: white;
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+            margin-bottom: 25px;
+        }
+
+        .twofa-section h3 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .twofa-section h3 i {
+            color: var(--primary);
+        }
+
+        .twofa-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .status-badge .enabled {
+            color: var(--success);
+            background: rgba(40, 167, 69, 0.1);
+            padding: 5px 15px;
+            border-radius: 30px;
+        }
+
+        .status-badge .disabled {
+            color: var(--text-secondary);
+            background: #f8f9fa;
+            padding: 5px 15px;
+            border-radius: 30px;
+        }
+
+        .last-used {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .btn-toggle {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-toggle.enable {
+            background: rgba(40, 167, 69, 0.1);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+
+        .btn-toggle.enable:hover {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-toggle.disable {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+
+        .btn-toggle.disable:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+        .info-box {
+            background: #e8f4fd;
+            border-left: 4px solid var(--info);
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 14px;
+            color: #0c5460;
+        }
+
+        .info-box i {
+            font-size: 18px;
+            color: var(--info);
         }
 
         /* Form Card */
@@ -571,7 +738,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .form-card h3 i {
-            color: #0B4F2E;
+            color: var(--primary);
         }
 
         .form-group {
@@ -602,10 +769,10 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .form-group input:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             background: white;
             outline: none;
-            box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
+            box-shadow: 0 0 0 4px var(--primary-light);
         }
 
         .form-group input:disabled {
@@ -620,7 +787,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .btn-submit {
-            background: #0B4F2E;
+            background: var(--primary);
             color: white;
             padding: 14px 25px;
             border: none;
@@ -635,7 +802,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .btn-submit:hover {
-            background: #1a7a42;
+            background: var(--primary-dark);
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -659,7 +826,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         .password-header input[type="checkbox"] {
             width: 18px;
             height: 18px;
-            accent-color: #0B4F2E;
+            accent-color: var(--primary);
             cursor: pointer;
         }
 
@@ -701,15 +868,15 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
         }
 
         .strength-weak {
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .strength-medium {
-            color: #ffc107;
+            color: var(--warning);
         }
 
         .strength-strong {
-            color: #28a745;
+            color: var(--success);
         }
 
         /* Responsive */
@@ -768,6 +935,11 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
             .profile-stats {
                 grid-template-columns: 1fr;
             }
+            
+            .twofa-status {
+                flex-direction: column;
+                align-items: flex-start;
+            }
         }
     </style>
 </head>
@@ -824,7 +996,7 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
                 <h1>My Profile</h1>
                 <p>View and manage your account information</p>
             </div>
-
+        
             <!-- Alert Messages -->
             <?php if($success_message): ?>
                 <div class="alert alert-success">
@@ -901,6 +1073,49 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
 
                 <!-- Right Column - Edit Forms -->
                 <div>
+                    <!-- 2FA Section -->
+                    <div class="twofa-section">
+                        <h3><i class="fas fa-shield-alt"></i> Two-Factor Authentication</h3>
+                        
+                        <div class="twofa-status">
+                            <div class="status-badge">
+                                <span class="<?php echo $two_factor_enabled ? 'enabled' : 'disabled'; ?>">
+                                    <i class="fas fa-<?php echo $two_factor_enabled ? 'check-circle' : 'times-circle'; ?>"></i>
+                                    <?php echo $two_factor_enabled ? 'Enabled' : 'Disabled'; ?>
+                                </span>
+                            </div>
+                            <?php if($two_factor_last_used): ?>
+                                <div class="last-used">
+                                    <i class="fas fa-clock"></i> Last used: <?php echo date('M d, Y h:i A', strtotime($two_factor_last_used)); ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+
+                        <?php if($two_factor_enabled): ?>
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="action" value="disable">
+                                <button type="submit" name="toggle_2fa" class="btn-toggle disable" onclick="return confirm('Are you sure you want to disable Two-Factor Authentication? This will make your account less secure.')">
+                                    <i class="fas fa-times-circle"></i> Disable 2FA
+                                </button>
+                            </form>
+                        <?php else: ?>
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="action" value="enable">
+                                <button type="submit" name="toggle_2fa" class="btn-toggle enable">
+                                    <i class="fas fa-check-circle"></i> Enable 2FA
+                                </button>
+                            </form>
+                        <?php endif; ?>
+
+                        <div class="info-box">
+                            <i class="fas fa-info-circle"></i>
+                            <div>
+                                <strong>What is Two-Factor Authentication?</strong>
+                                <p style="margin-top: 5px;">2FA adds an extra layer of security to your account. When enabled, you'll need to enter a verification code sent to your email after logging in with your password. This helps protect your account even if your password is compromised.</p>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Edit Profile Form -->
                     <div class="form-card">
                         <h3><i class="fas fa-user-edit"></i> Edit Profile Information</h3>
@@ -977,6 +1192,15 @@ $total_actions = 0; // Placeholder since user_logs doesn't exist
                                 </div>
                             </form>
                         </div>
+                        
+                        <?php if($two_factor_enabled): ?>
+                            <div class="info-box" style="margin-top: 15px;">
+                                <i class="fas fa-shield-alt"></i>
+                                <div>
+                                    <strong>2FA Protection:</strong> Since 2FA is enabled, you'll need to verify your identity via email when changing your password.
+                                </div>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>

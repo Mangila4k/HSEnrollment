@@ -29,14 +29,14 @@ $enrollment_query = "
     SELECT e.*, g.grade_name
     FROM enrollments e
     JOIN grade_levels g ON e.grade_id = g.id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    WHERE e.student_id = :student_id AND e.status = 'Enrolled'
     ORDER BY e.created_at DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 $grade_id = $enrollment ? $enrollment['grade_id'] : null;
 $grade_name = $enrollment ? $enrollment['grade_name'] : 'Not Enrolled';
@@ -49,73 +49,20 @@ $subjects_list = [];
 if($grade_id) {
     $subjects_query = "
         SELECT * FROM subjects 
-        WHERE grade_id = ? 
+        WHERE grade_id = :grade_id 
         ORDER BY subject_name
     ";
     $stmt = $conn->prepare($subjects_query);
-    $stmt->bind_param("i", $grade_id);
+    $stmt->bindParam(':grade_id', $grade_id, PDO::PARAM_INT);
     $stmt->execute();
-    $subjects = $stmt->get_result();
-    while($subject = $subjects->fetch_assoc()) {
+    
+    while($subject = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $subjects_list[] = $subject;
     }
-    $stmt->close();
+    $stmt = null;
 }
 
-// Since there's no grades table, we'll create sample data for demonstration
-// In a real application, you would have a grades table
-$has_grades = false; // Set to false since no grades table exists
-
-// For demo purposes, you can uncomment this to show sample grades
-// $has_grades = true;
-// $sample_grades = [];
-// foreach($subjects_list as $index => $subject) {
-//     $sample_grades[$subject['id']] = [
-//         '1st Quarter' => rand(75, 95),
-//         '2nd Quarter' => rand(75, 95),
-//         '3rd Quarter' => rand(75, 95),
-//         '4th Quarter' => rand(75, 95)
-//     ];
-// }
-
-// Calculate statistics if grades exist
 $total_subjects = count($subjects_list);
-$overall_average = 0;
-$passing_count = 0;
-$failing_count = 0;
-
-// if($has_grades) {
-//     $total_grades = 0;
-//     $grade_count = 0;
-//     foreach($sample_grades as $subject_id => $quarters) {
-//         $subject_total = 0;
-//         foreach($quarters as $grade) {
-//             $subject_total += $grade;
-//             $total_grades += $grade;
-//             $grade_count++;
-//         }
-//         $subject_avg = $subject_total / 4;
-//         if($subject_avg >= 75) $passing_count++; else $failing_count++;
-//     }
-//     $overall_average = $grade_count > 0 ? round($total_grades / $grade_count, 2) : 0;
-// }
-
-// Define grading scale
-function getGradeColor($grade) {
-    if($grade >= 90) return '#28a745';
-    if($grade >= 80) return '#5cb85c';
-    if($grade >= 75) return '#f0ad4e';
-    return '#d9534f';
-}
-
-function getGradeRemarks($grade) {
-    if($grade >= 90) return ['Excellent', '#28a745'];
-    if($grade >= 85) return ['Very Good', '#5cb85c'];
-    if($grade >= 80) return ['Good', '#5bc0de'];
-    if($grade >= 75) return ['Satisfactory', '#f0ad4e'];
-    if($grade >= 70) return ['Fair', '#f39c12'];
-    return ['Needs Improvement', '#d9534f'];
-}
 ?>
 
 <!DOCTYPE html>
@@ -299,57 +246,6 @@ function getGradeRemarks($grade) {
             font-size: 16px;
         }
 
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Alert Messages */
         .alert {
             padding: 15px 20px;
             border-radius: 12px;
@@ -660,7 +556,6 @@ function getGradeRemarks($grade) {
             margin-bottom: 10px;
         }
 
-        /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
                 grid-template-columns: repeat(2, 1fr);
@@ -701,12 +596,6 @@ function getGradeRemarks($grade) {
                 flex-direction: column;
                 gap: 15px;
                 align-items: flex-start;
-            }
-            
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
             }
             
             .stats-container {
@@ -919,6 +808,5 @@ function getGradeRemarks($grade) {
             });
         }, 5000);
     </script>
-    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>

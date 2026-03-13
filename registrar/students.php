@@ -56,38 +56,6 @@ $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
 
-// Build the query
-$query = "
-    SELECT u.*, 
-           e.id as enrollment_id,
-           e.grade_id,
-           e.status as enrollment_status,
-           e.strand,
-           e.school_year,
-           e.created_at as enrolled_date,
-           g.grade_name
-    FROM users u
-    LEFT JOIN enrollments e ON u.id = e.student_id
-    LEFT JOIN grade_levels g ON e.grade_id = g.id
-    WHERE u.role = 'Student'
-";
-
-if(!empty($grade_filter)) {
-    $query .= " AND e.grade_id = '$grade_filter'";
-}
-
-if(!empty($status_filter)) {
-    $query .= " AND e.status = '$status_filter'";
-}
-
-if(!empty($search_query)) {
-    $query .= " AND (u.fullname LIKE '%$search_query%' OR u.email LIKE '%$search_query%' OR u.id_number LIKE '%$search_query%')";
-}
-
-$query .= " ORDER BY u.created_at DESC";
-
-$students = $conn->query($query);
-
 // Get statistics
 $total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'Student'")->fetch_assoc()['count'];
 
@@ -113,6 +81,20 @@ $rejected_students = $conn->query("
 ")->fetch_assoc()['count'];
 
 $no_enrollment = $total_students - ($enrolled_students + $pending_students + $rejected_students);
+
+// Initialize Student Classifier
+require_once '../includes/StudentClassifier.php';
+$classifier = new StudentClassifier($conn);
+
+// Get student statistics with classification
+$student_stats = $classifier->getStudentStats();
+
+// Get all students with classification for display
+$all_students = $classifier->getAllStudentsWithClassification([
+    'grade' => $grade_filter,
+    'status' => $status_filter,
+    'search' => $search_query
+]);
 
 // Get grade levels for filter
 $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
@@ -665,7 +647,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         .student-avatar {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -1109,7 +1090,11 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             <div class="table-card">
                 <div class="table-header">
                     <h3><i class="fas fa-user-graduate"></i> Student Records</h3>
-                    <span class="grade-tag">Total: <?php echo $students ? $students->num_rows : 0; ?> students</span>
+                    <div style="display: flex; gap: 15px; align-items: center;">
+                        <span class="grade-tag" style="background: #28a745; color: white;">Old: <?php echo $student_stats['old_students']; ?></span>
+                        <span class="grade-tag" style="background: #007bff; color: white;">New: <?php echo $student_stats['new_students']; ?></span>
+                        <span class="grade-tag">Total: <?php echo count($all_students); ?> students</span>
+                    </div>
                 </div>
 
                 <table class="students-table">
@@ -1119,22 +1104,28 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                             <th>ID Number</th>
                             <th>Grade & Strand</th>
                             <th>Status</th>
+                            <th>Student Type</th>
                             <th>School Year</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if($students && $students->num_rows > 0): ?>
-                            <?php while($student = $students->fetch_assoc()): ?>
-                                <tr>
+                        <?php if(!empty($all_students)): ?>
+                            <?php foreach($all_students as $student): ?>
+                                <tr style="<?php echo $student['is_old'] ? 'background-color: rgba(40, 167, 69, 0.05);' : 'background-color: rgba(0, 123, 255, 0.05);'; ?>">
                                     <td>
                                         <div class="student-info">
-                                            <div class="student-avatar">
+                                            <div class="student-avatar" style="<?php echo $student['is_old'] ? 'background: #28a745;' : 'background: #007bff;'; ?>">
                                                 <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
                                             </div>
                                             <div class="student-details">
                                                 <h4><?php echo htmlspecialchars($student['fullname']); ?></h4>
                                                 <span><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($student['email']); ?></span>
+                                                <?php if($student['total_enrollments'] > 1): ?>
+                                                    <span style="font-size: 10px; color: #28a745;">
+                                                        <i class="fas fa-history"></i> <?php echo $student['total_enrollments']; ?> enrollments
+                                                    </span>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
                                     </td>
@@ -1158,6 +1149,14 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                             </span>
                                         <?php else: ?>
                                             <span class="badge badge-none">No record</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php echo $student['student_badge']; ?>
+                                        <?php if(!empty($student['enrollment_years'])): ?>
+                                            <div style="font-size: 10px; margin-top: 5px; color: #666;">
+                                                <?php echo $student['enrollment_years']; ?>
+                                            </div>
                                         <?php endif; ?>
                                     </td>
                                     <td>
@@ -1187,10 +1186,10 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                         </div>
                                     </td>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="6">
+                                <td colspan="7">
                                     <div class="no-data">
                                         <i class="fas fa-user-graduate"></i>
                                         <h3>No Students Found</h3>

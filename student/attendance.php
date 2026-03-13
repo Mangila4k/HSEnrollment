@@ -29,14 +29,14 @@ $enrollment_query = "
     SELECT e.*, g.grade_name
     FROM enrollments e
     JOIN grade_levels g ON e.grade_id = g.id
-    WHERE e.student_id = ? AND e.status = 'Enrolled'
+    WHERE e.student_id = :student_id AND e.status = 'Enrolled'
     ORDER BY e.created_at DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
 
 $grade_id = $enrollment ? $enrollment['grade_id'] : null;
 $grade_name = $enrollment ? $enrollment['grade_name'] : 'Not Enrolled';
@@ -49,53 +49,50 @@ $month_filter = isset($_GET['month']) ? $_GET['month'] : date('m');
 $year_filter = isset($_GET['year']) ? $_GET['year'] : date('Y');
 $subject_filter = isset($_GET['subject_id']) ? $_GET['subject_id'] : '';
 
-// Get student's attendance records - FIXED: Removed a.subject_name from ORDER BY
+// Get student's attendance records
 $attendance_query = "
     SELECT a.*, sub.subject_name
     FROM attendance a
     JOIN subjects sub ON a.subject_id = sub.id
-    WHERE a.student_id = ?
+    WHERE a.student_id = :student_id
 ";
-$params = [$student_id];
-$types = "i";
+$params = [':student_id' => $student_id];
 
 if(!empty($subject_filter)) {
-    $attendance_query .= " AND a.subject_id = ?";
-    $params[] = $subject_filter;
-    $types .= "i";
+    $attendance_query .= " AND a.subject_id = :subject_id";
+    $params[':subject_id'] = $subject_filter;
 }
 
 if(!empty($month_filter) && !empty($year_filter)) {
-    $attendance_query .= " AND MONTH(a.date) = ? AND YEAR(a.date) = ?";
-    $params[] = $month_filter;
-    $params[] = $year_filter;
-    $types .= "ii";
+    $attendance_query .= " AND MONTH(a.date) = :month AND YEAR(a.date) = :year";
+    $params[':month'] = $month_filter;
+    $params[':year'] = $year_filter;
 }
 
-// FIXED: Changed from a.subject_name to sub.subject_name
 $attendance_query .= " ORDER BY a.date DESC, sub.subject_name";
 
 $stmt = $conn->prepare($attendance_query);
-if(!empty($params)) {
-    $stmt->bind_param($types, ...$params);
+foreach($params as $key => $value) {
+    $param_type = is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR;
+    $stmt->bindValue($key, $value, $param_type);
 }
 $stmt->execute();
-$attendance_records = $stmt->get_result();
-$stmt->close();
+$attendance_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Get all attendance records for statistics (unfiltered)
 $all_attendance_query = "
     SELECT a.*, sub.subject_name
     FROM attendance a
     JOIN subjects sub ON a.subject_id = sub.id
-    WHERE a.student_id = ?
+    WHERE a.student_id = :student_id
     ORDER BY a.date DESC
 ";
 $stmt = $conn->prepare($all_attendance_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$all_records = $stmt->get_result();
-$stmt->close();
+$all_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Calculate statistics
 $total_days = 0;
@@ -104,7 +101,7 @@ $absent_count = 0;
 $late_count = 0;
 $attendance_by_subject = [];
 
-while($record = $all_records->fetch_assoc()) {
+foreach($all_records as $record) {
     $total_days++;
     
     if($record['status'] == 'Present') $present_count++;
@@ -134,27 +131,27 @@ $subjects_query = "
     SELECT DISTINCT sub.id, sub.subject_name
     FROM attendance a
     JOIN subjects sub ON a.subject_id = sub.id
-    WHERE a.student_id = ?
+    WHERE a.student_id = :student_id
     ORDER BY sub.subject_name
 ";
 $stmt = $conn->prepare($subjects_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$subjects = $stmt->get_result();
-$stmt->close();
+$subjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Get available months for filter
 $months_query = "
     SELECT DISTINCT MONTH(date) as month, YEAR(date) as year
     FROM attendance
-    WHERE student_id = ?
+    WHERE student_id = :student_id
     ORDER BY year DESC, month DESC
 ";
 $stmt = $conn->prepare($months_query);
-$stmt->bind_param("i", $student_id);
+$stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
 $stmt->execute();
-$available_months = $stmt->get_result();
-$stmt->close();
+$available_months = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt = null;
 
 // Month names
 $month_names = [
@@ -1212,16 +1209,15 @@ $month_names = [
                                 <select name="month">
                                     <option value="">All Months</option>
                                     <?php 
-                                    if($available_months && $available_months->num_rows > 0) {
-                                        $available_months->data_seek(0);
-                                        while($am = $available_months->fetch_assoc()): 
+                                    if(!empty($available_months)) {
+                                        foreach($available_months as $am): 
                                             $selected = ($month_filter == $am['month'] && $year_filter == $am['year']) ? 'selected' : '';
                                     ?>
                                         <option value="<?php echo $am['month']; ?>" data-year="<?php echo $am['year']; ?>" <?php echo $selected; ?>>
                                             <?php echo $month_names[$am['month']] . ' ' . $am['year']; ?>
                                         </option>
                                     <?php 
-                                        endwhile;
+                                        endforeach;
                                     } 
                                     ?>
                                 </select>
@@ -1233,15 +1229,14 @@ $month_names = [
                                 <select name="subject_id">
                                     <option value="">All Subjects</option>
                                     <?php 
-                                    if($subjects && $subjects->num_rows > 0) {
-                                        $subjects->data_seek(0);
-                                        while($subject = $subjects->fetch_assoc()): 
+                                    if(!empty($subjects)) {
+                                        foreach($subjects as $subject): 
                                     ?>
                                         <option value="<?php echo $subject['id']; ?>" <?php echo $subject_filter == $subject['id'] ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($subject['subject_name']); ?>
                                         </option>
                                     <?php 
-                                        endwhile;
+                                        endforeach;
                                     } 
                                     ?>
                                 </select>
@@ -1263,10 +1258,10 @@ $month_names = [
                 <div class="attendance-card">
                     <div class="attendance-header">
                         <h3><i class="fas fa-calendar-check"></i> Attendance Records</h3>
-                        <span class="subject-tag">Total: <?php echo $attendance_records ? $attendance_records->num_rows : 0; ?> records</span>
+                        <span class="subject-tag">Total: <?php echo count($attendance_records); ?> records</span>
                     </div>
 
-                    <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
+                    <?php if(!empty($attendance_records)): ?>
                         <table class="attendance-table">
                             <thead>
                                 <tr>
@@ -1276,7 +1271,7 @@ $month_names = [
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($record = $attendance_records->fetch_assoc()): ?>
+                                <?php foreach($attendance_records as $record): ?>
                                     <tr>
                                         <td>
                                             <span class="activity-time">
@@ -1293,7 +1288,7 @@ $month_names = [
                                             </span>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     <?php else: ?>
@@ -1382,6 +1377,5 @@ $month_names = [
             });
         }, 5000);
     </script>
-    <?php include('../includes/chatbot_widget.php'); ?>
 </body>
 </html>
