@@ -77,83 +77,70 @@ if(isset($_POST['register'])){
 
     // Check if email already exists
     if(empty($errors)) {
-        $check = $conn->prepare("SELECT id FROM users WHERE email = ?");
-        $check->bind_param("s", $email);
-        $check->execute();
-        $check->store_result();
-        
-        if($check->num_rows > 0) {
-            $errors[] = "Email already registered!";
+        try {
+            $check = $conn->prepare("SELECT id FROM users WHERE email = ?");
+            $check->execute([$email]);
+            
+            if($check->rowCount() > 0) {
+                $errors[] = "Email already registered!";
+            }
+        } catch(PDOException $e) {
+            $errors[] = "Database error: " . $e->getMessage();
         }
-        $check->close();
     }
     
     // Check if ID number already exists (if provided)
     if(empty($errors) && $id_number) {
-        $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ?");
-        $check_id->bind_param("s", $id_number);
-        $check_id->execute();
-        $check_id->store_result();
-        
-        if($check_id->num_rows > 0) {
-            $errors[] = "ID number already exists!";
+        try {
+            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ?");
+            $check_id->execute([$id_number]);
+            
+            if($check_id->rowCount() > 0) {
+                $errors[] = "ID number already exists!";
+            }
+        } catch(PDOException $e) {
+            $errors[] = "Database error: " . $e->getMessage();
         }
-        $check_id->close();
     }
 
-<<<<<<< HEAD
-    // If no errors, insert the user (with is_approved = 0)
-    if(empty($errors)) {
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $role = "Student"; // Default role for registration
-        $is_approved = 0; // Not approved by default
-        
-        // Insert based on whether ID number is provided
-        if($id_number) {
-            $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role, is_approved) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("sssssi", $id_number, $fullname, $email, $hashed_password, $role, $is_approved);
-        } else {
-            $stmt = $conn->prepare("INSERT INTO users (fullname, email, password, role, is_approved) VALUES (?, ?, ?, ?, ?)");
-            $stmt->bind_param("ssssi", $fullname, $email, $hashed_password, $role, $is_approved);
-        }
-        
-        if($stmt->execute()) {
-            $success = "Registration successful! Your account is pending approval from the administrator. You will be able to login once approved.";
-=======
     // If no errors, insert the user with pending status
     if(empty($errors)) {
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        $status = 'pending'; // Set status to pending
-        
-        // Update the database schema first - you need to add these columns to your users table
-        // Run this SQL in your database:
-        /*
-        ALTER TABLE users 
-        ADD COLUMN firstname VARCHAR(100) AFTER id_number,
-        ADD COLUMN middlename VARCHAR(50) AFTER firstname,
-        ADD COLUMN lastname VARCHAR(100) AFTER middlename,
-        ADD COLUMN birthdate DATE AFTER lastname,
-        ADD COLUMN gender ENUM('Male', 'Female', 'Other') AFTER birthdate;
-        */
-        
-        // Insert based on whether ID number is provided
-        if($id_number) {
-            $stmt = $conn->prepare("INSERT INTO users (id_number, firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("sssssssssss", $id_number, $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
-        } else {
-            $stmt = $conn->prepare("INSERT INTO users (firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("ssssssssss", $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
-        }
-        
-        if($stmt->execute()) {
+        try {
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+            $status = 'pending'; // Set status to pending
+            
+            // Check if columns exist, if not, use the simple insert
+            // First, try to check if the new columns exist
+            $check_columns = $conn->query("SHOW COLUMNS FROM users LIKE 'firstname'");
+            $has_new_columns = ($check_columns && $check_columns->rowCount() > 0);
+            
+            if($has_new_columns) {
+                // Insert with all fields (new schema)
+                if($id_number) {
+                    $stmt = $conn->prepare("INSERT INTO users (id_number, firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$id_number, $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status]);
+                } else {
+                    $stmt = $conn->prepare("INSERT INTO users (firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status]);
+                }
+            } else {
+                // Fallback to old schema (just fullname, email, password)
+                if($id_number) {
+                    $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?)");
+                    $stmt->execute([$id_number, $fullname, $email, $hashed_password, $role, $status]);
+                } else {
+                    $stmt = $conn->prepare("INSERT INTO users (fullname, email, password, role, status) VALUES (?, ?, ?, ?, ?)");
+                    $stmt->execute([$fullname, $email, $hashed_password, $role, $status]);
+                }
+            }
+            
             $success = "Registration successful! Your account is pending approval from the administrator. You will be notified once your account is approved.";
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
             // Clear form data
             $_POST = array();
-        } else {
-            $errors[] = "Registration failed: " . $conn->error;
+            
+        } catch(PDOException $e) {
+            $errors[] = "Registration failed: " . $e->getMessage();
         }
-        $stmt->close();
     }
     
     // If there are errors, combine them

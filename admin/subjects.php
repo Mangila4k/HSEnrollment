@@ -27,17 +27,25 @@ if(isset($_SESSION['error_message'])) {
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Check if subject has attendance records
-    $check_attendance = $conn->query("SELECT id FROM attendance WHERE subject_id = '$delete_id'");
-    if($check_attendance && $check_attendance->num_rows > 0) {
-        $error_message = "Cannot delete subject because it has attendance records.";
-    } else {
-        $delete = $conn->query("DELETE FROM subjects WHERE id = '$delete_id'");
-        if($delete) {
-            $success_message = "Subject deleted successfully!";
+    try {
+        // Check if subject has attendance records
+        $check_attendance = $conn->prepare("SELECT id FROM attendance WHERE subject_id = ?");
+        $check_attendance->execute([$delete_id]);
+        
+        if($check_attendance->rowCount() > 0) {
+            $error_message = "Cannot delete subject because it has attendance records.";
         } else {
-            $error_message = "Error deleting subject.";
+            $delete = $conn->prepare("DELETE FROM subjects WHERE id = ?");
+            $delete->execute([$delete_id]);
+            
+            if($delete->rowCount() > 0) {
+                $success_message = "Subject deleted successfully!";
+            } else {
+                $error_message = "Error deleting subject.";
+            }
         }
+    } catch(PDOException $e) {
+        $error_message = "Error: " . $e->getMessage();
     }
 }
 
@@ -45,35 +53,58 @@ if(isset($_GET['delete'])) {
 $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
 
-// Build the query
+// Build the query - get all subjects with their grade levels
 $query = "
-    SELECT s.*, g.grade_name,
+    SELECT s.*, g.grade_name, g.id as grade_id,
            (SELECT COUNT(*) FROM attendance WHERE subject_id = s.id) as attendance_count
     FROM subjects s
     JOIN grade_levels g ON s.grade_id = g.id
     WHERE 1=1
 ";
 
+$params = [];
+
 if(!empty($grade_filter)) {
-    $query .= " AND s.grade_id = '$grade_filter'";
+    $query .= " AND s.grade_id = ?";
+    $params[] = $grade_filter;
 }
 
 if(!empty($search_query)) {
-    $query .= " AND s.subject_name LIKE '%$search_query%'";
+    $query .= " AND s.subject_name LIKE ?";
+    $params[] = "%$search_query%";
 }
 
 $query .= " ORDER BY g.id, s.subject_name";
 
-$subjects = $conn->query($query);
+$stmt = $conn->prepare($query);
+$stmt->execute($params);
+$subjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Group subjects by grade level
+$subjects_by_grade = [];
+foreach($subjects as $subject) {
+    $grade_name = $subject['grade_name'];
+    $grade_id = $subject['grade_id'];
+    if(!isset($subjects_by_grade[$grade_id])) {
+        $subjects_by_grade[$grade_id] = [
+            'grade_name' => $grade_name,
+            'subjects' => []
+        ];
+    }
+    $subjects_by_grade[$grade_id]['subjects'][] = $subject;
+}
 
 // Get statistics
-$total_subjects = $conn->query("SELECT COUNT(*) as count FROM subjects")->fetch_assoc()['count'];
+$total_subjects_stmt = $conn->prepare("SELECT COUNT(*) as count FROM subjects");
+$total_subjects_stmt->execute();
+$total_subjects = $total_subjects_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get subject count per grade
-$subjects_per_grade = [];
 $grade_count_query = "
     SELECT g.id, g.grade_name, COUNT(s.id) as subject_count
     FROM grade_levels g
@@ -81,7 +112,25 @@ $grade_count_query = "
     GROUP BY g.id
     ORDER BY g.id
 ";
-$grade_counts = $conn->query($grade_count_query);
+$grade_counts_stmt = $conn->prepare($grade_count_query);
+$grade_counts_stmt->execute();
+$grade_counts = $grade_counts_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get subjects with attendance
+$with_attendance_stmt = $conn->prepare("SELECT COUNT(DISTINCT subject_id) as count FROM attendance");
+$with_attendance_stmt->execute();
+$with_attendance = $with_attendance_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+// Calculate JHS and SHS counts
+$jhs_count = 0;
+$shs_count = 0;
+foreach($grade_counts as $gc) {
+    if($gc['id'] <= 4) {
+        $jhs_count += $gc['subject_count'];
+    } else {
+        $shs_count += $gc['subject_count'];
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -265,56 +314,6 @@ $grade_counts = $conn->query($grade_count_query);
             font-size: 16px;
         }
 
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
         /* Alert Messages */
         .alert {
             padding: 15px 20px;
@@ -430,60 +429,55 @@ $grade_counts = $conn->query($grade_count_query);
         /* Grade Cards */
         .grade-cards {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 20px;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 15px;
             margin-bottom: 30px;
         }
 
         .grade-card {
             background: white;
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            display: flex;
-            align-items: center;
-            gap: 15px;
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
             transition: all 0.3s ease;
+            cursor: pointer;
+            border: 2px solid transparent;
+            text-decoration: none;
+            display: block;
         }
 
         .grade-card:hover {
             transform: translateY(-3px);
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
         }
 
-        .grade-icon {
-            width: 50px;
-            height: 50px;
+        .grade-card.active {
+            border-color: #0B4F2E;
             background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             color: white;
+        }
+
+        .grade-card.active .grade-number,
+        .grade-card.active .grade-subject-count {
+            color: white;
+        }
+
+        .grade-number {
             font-size: 24px;
-        }
-
-        .grade-info {
-            flex: 1;
-        }
-
-        .grade-info h4 {
+            font-weight: 700;
             color: var(--text-primary);
-            font-size: 16px;
             margin-bottom: 5px;
         }
 
-        .grade-info p {
+        .grade-name {
+            font-size: 14px;
             color: var(--text-secondary);
-            font-size: 13px;
+            margin-bottom: 8px;
         }
 
-        .grade-badge {
-            background: rgba(11, 79, 46, 0.1);
+        .grade-subject-count {
+            font-size: 12px;
             color: #0B4F2E;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 14px;
             font-weight: 600;
         }
 
@@ -593,40 +587,63 @@ $grade_counts = $conn->query($grade_count_query);
             outline: none;
         }
 
-        /* Table Card */
-        .table-card {
+        /* Grade Sections */
+        .grade-section {
             background: white;
             border-radius: 20px;
-            padding: 25px;
+            margin-bottom: 30px;
+            overflow: hidden;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .table-header {
+        .grade-section-header {
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            color: white;
+            padding: 20px 25px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 25px;
-            flex-wrap: wrap;
-            gap: 15px;
+            cursor: pointer;
         }
 
-        .table-header h3 {
-            color: var(--text-primary);
-            font-size: 18px;
+        .grade-section-header h2 {
+            font-size: 20px;
             font-weight: 600;
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        .table-header h3 i {
-            color: #0B4F2E;
+        .grade-section-header h2 i {
+            color: #FFD700;
         }
 
-        .table-container {
-            overflow-x: auto;
+        .grade-section-header .badge {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 14px;
         }
 
+        .grade-section-header .toggle-icon {
+            font-size: 20px;
+            transition: transform 0.3s;
+        }
+
+        .grade-section-header.collapsed .toggle-icon {
+            transform: rotate(-90deg);
+        }
+
+        .grade-section-content {
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        .grade-section-content.collapsed {
+            display: none;
+        }
+
+        /* Table */
         .subjects-table {
             width: 100%;
             border-collapse: collapse;
@@ -660,39 +677,27 @@ $grade_counts = $conn->query($grade_count_query);
         }
 
         .subject-icon {
-            width: 45px;
-            height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 12px;
+            width: 40px;
+            height: 40px;
+            background: rgba(11, 79, 46, 0.1);
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-size: 20px;
+            color: #0B4F2E;
+            font-size: 18px;
         }
 
         .subject-details h4 {
-            font-size: 16px;
+            font-size: 15px;
             margin-bottom: 3px;
             color: var(--text-primary);
-        }
-
-        .subject-details span {
-            font-size: 12px;
-            color: var(--text-secondary);
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .subject-details span i {
-            font-size: 11px;
         }
 
         .grade-tag {
             background: rgba(11, 79, 46, 0.1);
             color: #0B4F2E;
-            padding: 5px 12px;
+            padding: 4px 10px;
             border-radius: 20px;
             font-size: 12px;
             font-weight: 500;
@@ -702,9 +707,9 @@ $grade_counts = $conn->query($grade_count_query);
         .attendance-badge {
             background: rgba(76, 201, 240, 0.1);
             color: #4cc9f0;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
             font-weight: 500;
             display: inline-block;
         }
@@ -715,8 +720,8 @@ $grade_counts = $conn->query($grade_count_query);
         }
 
         .btn-icon {
-            width: 35px;
-            height: 35px;
+            width: 32px;
+            height: 32px;
             border-radius: 8px;
             border: none;
             display: flex;
@@ -747,45 +752,14 @@ $grade_counts = $conn->query($grade_count_query);
 
         .no-data {
             text-align: center;
-            padding: 60px;
+            padding: 40px;
             color: var(--text-secondary);
         }
 
         .no-data i {
-            font-size: 60px;
-            margin-bottom: 20px;
+            font-size: 48px;
+            margin-bottom: 15px;
             opacity: 0.3;
-        }
-
-        .no-data h3 {
-            color: var(--text-primary);
-            margin-bottom: 10px;
-        }
-
-        /* Pagination */
-        .pagination {
-            margin-top: 25px;
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-
-        .page-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
-            background: white;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .page-btn:hover,
-        .page-btn.active {
-            background: #0B4F2E;
-            color: white;
-            border-color: #0B4F2E;
         }
 
         /* Responsive */
@@ -795,7 +769,7 @@ $grade_counts = $conn->query($grade_count_query);
             }
             
             .grade-cards {
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: repeat(3, 1fr);
             }
         }
 
@@ -835,18 +809,12 @@ $grade_counts = $conn->query($grade_count_query);
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
             }
             
             .grade-cards {
-                grid-template-columns: 1fr;
+                grid-template-columns: repeat(2, 1fr);
             }
             
             .actions-bar {
@@ -872,6 +840,12 @@ $grade_counts = $conn->query($grade_count_query);
                 justify-content: center;
             }
             
+            .grade-section-header {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            
             .subject-info {
                 flex-direction: column;
                 text-align: center;
@@ -886,12 +860,7 @@ $grade_counts = $conn->query($grade_count_query);
 <body>
     <div class="app-container">
         <!-- Sidebar -->
-        <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
+        <div class="sidebar">           
             <div class="admin-info">
                 <div class="admin-avatar">
                     <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
@@ -934,7 +903,7 @@ $grade_counts = $conn->query($grade_count_query);
             <!-- Header -->
             <div class="dashboard-header">
                 <h1>Subjects Management</h1>
-                <p>Manage subjects offered per grade level</p>
+                <p>Manage subjects offered per grade level (Grade 7 - Grade 12)</p>
             </div>
 
             <!-- Alert Messages -->
@@ -967,41 +936,23 @@ $grade_counts = $conn->query($grade_count_query);
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Junior High</h3>
+                        <h3>Junior High School</h3>
                         <div class="stat-icon">
                             <i class="fas fa-users"></i>
                         </div>
                     </div>
-                    <div class="stat-number">
-                        <?php 
-                        $jhs_count = 0;
-                        $grade_counts->data_seek(0);
-                        while($gc = $grade_counts->fetch_assoc()) {
-                            if($gc['id'] <= 4) $jhs_count += $gc['subject_count'];
-                        }
-                        echo $jhs_count;
-                        ?>
-                    </div>
+                    <div class="stat-number"><?php echo $jhs_count; ?></div>
                     <div class="stat-label">Grades 7-10</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Senior High</h3>
+                        <h3>Senior High School</h3>
                         <div class="stat-icon">
                             <i class="fas fa-user-graduate"></i>
                         </div>
                     </div>
-                    <div class="stat-number">
-                        <?php 
-                        $shs_count = 0;
-                        $grade_counts->data_seek(0);
-                        while($gc = $grade_counts->fetch_assoc()) {
-                            if($gc['id'] >= 5) $shs_count += $gc['subject_count'];
-                        }
-                        echo $shs_count;
-                        ?>
-                    </div>
+                    <div class="stat-number"><?php echo $shs_count; ?></div>
                     <div class="stat-label">Grades 11-12</div>
                 </div>
 
@@ -1012,51 +963,40 @@ $grade_counts = $conn->query($grade_count_query);
                             <i class="fas fa-calendar-check"></i>
                         </div>
                     </div>
-                    <div class="stat-number">
-                        <?php 
-                        $with_attendance = $conn->query("SELECT COUNT(DISTINCT subject_id) as count FROM attendance")->fetch_assoc()['count'];
-                        echo $with_attendance;
-                        ?>
-                    </div>
+                    <div class="stat-number"><?php echo $with_attendance; ?></div>
                     <div class="stat-label">Subjects with records</div>
                 </div>
             </div>
 
-            <!-- Grade Cards -->
-            <div class="grade-cards">
-                <?php 
-                $grade_counts->data_seek(0);
-                while($grade = $grade_counts->fetch_assoc()): 
-                ?>
-                    <div class="grade-card">
-                        <div class="grade-icon">
-                            <i class="fas fa-layer-group"></i>
-                        </div>
-                        <div class="grade-info">
-                            <h4><?php echo $grade['grade_name']; ?></h4>
-                            <p><?php echo $grade['subject_count']; ?> subjects</p>
-                        </div>
-                        <div class="grade-badge">
-                            <?php echo $grade['subject_count']; ?>
-                        </div>
-                    </div>
-                <?php endwhile; ?>
-            </div>
+            <!-- Grade Level Quick Navigation -->
+            <!-- Grade Level Quick Navigation -->
+<div class="grade-cards">
+    <?php foreach($grade_counts as $grade): 
+        // Only show grades 1-6 (which correspond to Grade 7-12)
+        if($grade['id'] >= 1 && $grade['id'] <= 6):
+    ?>
+        <a href="?grade=<?php echo $grade['id']; ?>" class="grade-card <?php echo $grade_filter == $grade['id'] ? 'active' : ''; ?>">
+            <div class="grade-number">Grade <?php echo $grade['id'] + 6; ?></div>
+            <div class="grade-name"><?php echo htmlspecialchars($grade['grade_name']); ?></div>
+            <div class="grade-subject-count"><?php echo $grade['subject_count']; ?> Subjects</div>
+        </a>
+    <?php 
+        endif;
+    endforeach; 
+    ?>
+</div>
 
             <!-- Actions Bar -->
             <div class="actions-bar">
                 <form method="GET" action="" style="display: flex; gap: 15px; flex-wrap: wrap; width: 100%;">
                     <div class="filter-group">
                         <select name="grade" class="filter-select">
-                            <option value="">All Grades</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <option value="">All Grades (7-12)</option>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
-                                    <?php echo $grade['grade_name']; ?>
+                                    <?php echo htmlspecialchars($grade['grade_name']); ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
 
                         <button type="submit" class="btn-add" style="padding: 10px 20px;">
@@ -1079,93 +1019,110 @@ $grade_counts = $conn->query($grade_count_query);
                 </a>
             </div>
 
-            <!-- Subjects Table -->
-            <div class="table-card">
-                <div class="table-header">
-                    <h3><i class="fas fa-book"></i> Subject List</h3>
-                    <span class="grade-tag">Total: <?php echo $subjects ? $subjects->num_rows : 0; ?> subjects</span>
-                </div>
-
-                <div class="table-container">
-                    <table class="subjects-table">
-                        <thead>
-                            <tr>
-                                <th>Subject</th>
-                                <th>Grade Level</th>
-                                <th>Attendance Records</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if($subjects && $subjects->num_rows > 0): ?>
-                                <?php while($subject = $subjects->fetch_assoc()): ?>
+            <!-- Subjects by Grade Level -->
+            <?php if(count($subjects_by_grade) > 0): ?>
+                <?php 
+                $grade_order = [1 => 'Grade 7', 2 => 'Grade 8', 3 => 'Grade 9', 4 => 'Grade 10', 5 => 'Grade 11', 6 => 'Grade 12'];
+                foreach($grade_order as $grade_id => $grade_display):
+                    if(isset($subjects_by_grade[$grade_id])):
+                        $grade_data = $subjects_by_grade[$grade_id];
+                ?>
+                    <div class="grade-section">
+                        <div class="grade-section-header" onclick="toggleGradeSection(this)">
+                            <h2>
+                                <i class="fas fa-layer-group"></i>
+                                <?php echo $grade_display; ?> - <?php echo $grade_data['grade_name']; ?>
+                            </h2>
+                            <div style="display: flex; gap: 15px; align-items: center;">
+                                <span class="badge"><?php echo count($grade_data['subjects']); ?> Subjects</span>
+                                <i class="fas fa-chevron-down toggle-icon"></i>
+                            </div>
+                        </div>
+                        <div class="grade-section-content">
+                            <table class="subjects-table">
+                                <thead>
                                     <tr>
-                                        <td>
-                                            <div class="subject-info">
-                                                <div class="subject-icon">
-                                                    <i class="fas fa-book-open"></i>
-                                                </div>
-                                                <div class="subject-details">
-                                                    <h4><?php echo htmlspecialchars($subject['subject_name']); ?></h4>
-                                                    <span><i class="fas fa-hashtag"></i> ID: <?php echo $subject['id']; ?></span>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <span class="grade-tag"><?php echo htmlspecialchars($subject['grade_name']); ?></span>
-                                        </td>
-                                        <td>
-                                            <span class="attendance-badge">
-                                                <i class="fas fa-calendar-check"></i>
-                                                <?php echo $subject['attendance_count']; ?> records
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div class="action-btns">
-                                                <a href="view_subject.php?id=<?php echo $subject['id']; ?>" class="btn-icon btn-view" title="View Details">
-                                                    <i class="fas fa-eye"></i>
-                                                </a>
-                                                <a href="edit_subject.php?id=<?php echo $subject['id']; ?>" class="btn-icon btn-edit" title="Edit">
-                                                    <i class="fas fa-edit"></i>
-                                                </a>
-                                                <?php if($subject['attendance_count'] == 0): ?>
-                                                    <a href="?delete=<?php echo $subject['id']; ?>" class="btn-icon btn-delete" title="Delete" 
-                                                       onclick="return confirm('Are you sure you want to delete this subject?')">
-                                                        <i class="fas fa-trash"></i>
-                                                    </a>
-                                                <?php endif; ?>
-                                            </div>
-                                        </td>
+                                        <th>Subject</th>
+                                        <th>ID</th>
+                                        <th>Attendance Records</th>
+                                        <th>Actions</th>
                                     </tr>
-                                <?php endwhile; ?>
-                            <?php else: ?>
-                                <tr>
-                                    <td colspan="4">
-                                        <div class="no-data">
-                                            <i class="fas fa-book"></i>
-                                            <h3>No Subjects Found</h3>
-                                            <p>Click the "Add New Subject" button to add your first subject.</p>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
+                                </thead>
+                                <tbody>
+                                    <?php foreach($grade_data['subjects'] as $subject): ?>
+                                        <tr>
+                                            <td>
+                                                <div class="subject-info">
+                                                    <div class="subject-icon">
+                                                        <i class="fas fa-book-open"></i>
+                                                    </div>
+                                                    <div class="subject-details">
+                                                        <h4><?php echo htmlspecialchars($subject['subject_name']); ?></h4>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td>
+                                                <span class="grade-tag">#<?php echo $subject['id']; ?></span>
+                                            </td>
+                                            <td>
+                                                <span class="attendance-badge">
+                                                    <i class="fas fa-calendar-check"></i>
+                                                    <?php echo $subject['attendance_count']; ?> records
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <div class="action-btns">
+                                                    <a href="view_subject.php?id=<?php echo $subject['id']; ?>" class="btn-icon btn-view" title="View Details">
+                                                        <i class="fas fa-eye"></i>
+                                                    </a>
+                                                    <a href="edit_subject.php?id=<?php echo $subject['id']; ?>" class="btn-icon btn-edit" title="Edit">
+                                                        <i class="fas fa-edit"></i>
+                                                    </a>
+                                                    <?php if($subject['attendance_count'] == 0): ?>
+                                                        <a href="?delete=<?php echo $subject['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                                           onclick="return confirm('Are you sure you want to delete this subject?')">
+                                                            <i class="fas fa-trash"></i>
+                                                        </a>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                <?php 
+                    endif;
+                endforeach; 
+                ?>
+            <?php else: ?>
+                <div class="table-card">
+                    <div class="no-data">
+                        <i class="fas fa-book"></i>
+                        <h3>No Subjects Found</h3>
+                        <p>Click the "Add New Subject" button to add your first subject.</p>
+                    </div>
                 </div>
-
-                <!-- Pagination -->
-                <div class="pagination">
-                    <button class="page-btn active">1</button>
-                    <button class="page-btn">2</button>
-                    <button class="page-btn">3</button>
-                    <button class="page-btn">4</button>
-                    <button class="page-btn">5</button>
-                </div>
-            </div>
+            <?php endif; ?>
         </div>
     </div>
 
     <script>
+        // Toggle grade section
+        function toggleGradeSection(header) {
+            const content = header.nextElementSibling;
+            const parent = header.parentElement;
+            
+            if (content.classList.contains('collapsed')) {
+                content.classList.remove('collapsed');
+                header.classList.remove('collapsed');
+            } else {
+                content.classList.add('collapsed');
+                header.classList.add('collapsed');
+            }
+        }
+
         // Auto-hide alerts after 5 seconds
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');
@@ -1178,16 +1135,22 @@ $grade_counts = $conn->query($grade_count_query);
         }, 5000);
 
         // Auto-submit form when filter changes
-        document.querySelector('.filter-select').addEventListener('change', function() {
-            this.form.submit();
-        });
+        const filterSelect = document.querySelector('.filter-select');
+        if(filterSelect) {
+            filterSelect.addEventListener('change', function() {
+                this.form.submit();
+            });
+        }
 
         // Search on Enter key
-        document.querySelector('.search-box input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                this.form.submit();
-            }
-        });
+        const searchInput = document.querySelector('.search-box input');
+        if(searchInput) {
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    this.form.submit();
+                }
+            });
+        }
     </script>
 </body>
 </html>

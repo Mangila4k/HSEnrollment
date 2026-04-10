@@ -9,21 +9,50 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
 }
 
 $admin_name = $_SESSION['user']['fullname'];
+$admin_id = $_SESSION['user']['id'];
 
-// Count total students
-$student_count = $conn->query("SELECT * FROM users WHERE role='Student'")->num_rows;
-$teacher_count = $conn->query("SELECT * FROM users WHERE role='Teacher'")->num_rows;
-$section_count = $conn->query("SELECT * FROM sections")->num_rows;
-$subject_count = $conn->query("SELECT * FROM subjects")->num_rows;
+// Get admin details including profile picture
+$admin_stmt = $conn->prepare("SELECT profile_picture FROM users WHERE id = ?");
+$admin_stmt->execute([$admin_id]);
+$admin = $admin_stmt->fetch(PDO::FETCH_ASSOC);
+$profile_picture = $admin['profile_picture'] ?? null;
+
+// Count total students - FIXED for PDO
+$student_stmt = $conn->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Student'");
+$student_stmt->execute();
+$student_count = $student_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$teacher_stmt = $conn->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Teacher'");
+$teacher_stmt->execute();
+$teacher_count = $teacher_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$section_stmt = $conn->prepare("SELECT COUNT(*) as count FROM sections");
+$section_stmt->execute();
+$section_count = $section_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$subject_stmt = $conn->prepare("SELECT COUNT(*) as count FROM subjects");
+$subject_stmt->execute();
+$subject_count = $subject_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get additional stats
-$enrollment_count = $conn->query("SELECT COUNT(*) as count FROM enrollments")->fetch_assoc()['count'];
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'")->fetch_assoc()['count'];
-$enrolled_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'")->fetch_assoc()['count'];
-$rejected_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'")->fetch_assoc()['count'];
+$enrollment_stmt = $conn->prepare("SELECT COUNT(*) as count FROM enrollments");
+$enrollment_stmt->execute();
+$enrollment_count = $enrollment_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-// Get recent enrollments
-$recent_enrollments = $conn->query("
+$pending_stmt = $conn->prepare("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'");
+$pending_stmt->execute();
+$pending_count = $pending_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$enrolled_stmt = $conn->prepare("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'");
+$enrolled_stmt->execute();
+$enrolled_count = $enrolled_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$rejected_stmt = $conn->prepare("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'");
+$rejected_stmt->execute();
+$rejected_count = $rejected_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+// Get recent enrollments - FIXED for PDO
+$recent_enrollments = $conn->prepare("
     SELECT e.*, u.fullname, g.grade_name 
     FROM enrollments e 
     JOIN users u ON e.student_id = u.id 
@@ -31,9 +60,11 @@ $recent_enrollments = $conn->query("
     ORDER BY e.created_at DESC 
     LIMIT 5
 ");
+$recent_enrollments->execute();
+$recent_enrollments_list = $recent_enrollments->fetchAll(PDO::FETCH_ASSOC);
 
-// Get recent activities (combined) - FIXED: Added table aliases for created_at
-$recent_activities = $conn->query("
+// Get recent activities (combined) - FIXED for PDO
+$recent_activities = $conn->prepare("
     (SELECT 'enrollment' as type, e.created_at, CONCAT(u.fullname, ' enrolled in ', g.grade_name) as description
      FROM enrollments e
      JOIN users u ON e.student_id = u.id
@@ -46,6 +77,8 @@ $recent_activities = $conn->query("
      ORDER BY u.created_at DESC LIMIT 3)
     ORDER BY created_at DESC LIMIT 5
 ");
+$recent_activities->execute();
+$recent_activities_list = $recent_activities->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -104,17 +137,39 @@ $recent_activities = $conn->query("
             box-shadow: 4px 0 10px rgba(0, 0, 0, 0.1);
         }
 
-        .sidebar h2 {
-            font-size: 24px;
+        .sidebar-header {
+            text-align: center;
             margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .sidebar-logo {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 15px;
             display: flex;
             align-items: center;
+            justify-content: center;
+        }
+
+        .sidebar-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 50%;
+            border: 3px solid #FFD700;
+        }
+
+        .sidebar h2 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             gap: 10px;
             color: #fff;
             font-weight: 700;
             letter-spacing: 1px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
         }
 
         .sidebar h2 i {
@@ -131,16 +186,31 @@ $recent_activities = $conn->query("
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             margin: 0 auto 15px;
+            border: 3px solid white;
+            overflow: hidden;
+            background: #FFD700;
+        }
+
+        .admin-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .admin-avatar .avatar-initial {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 32px;
             font-weight: bold;
             color: #0B4F2E;
-            border: 3px solid white;
         }
 
         .admin-info h3 {
@@ -640,6 +710,11 @@ $recent_activities = $conn->query("
                 padding: 20px 10px;
             }
             
+            .sidebar-logo {
+                width: 50px;
+                height: 50px;
+            }
+            
             .sidebar h2 span,
             .admin-info h3,
             .admin-info p,
@@ -693,14 +768,15 @@ $recent_activities = $conn->query("
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
             <div class="admin-info">
                 <div class="admin-avatar">
-                    <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                    <?php if($profile_picture && file_exists("../" . $profile_picture)): ?>
+                        <img src="../<?php echo $profile_picture; ?>" alt="Profile Picture">
+                    <?php else: ?>
+                        <div class="avatar-initial">
+                            <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <h3><?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?></h3>
                 <p><i class="fas fa-user-shield"></i> Administrator</p>
@@ -737,11 +813,6 @@ $recent_activities = $conn->query("
 
         <!-- Main Content -->
         <div class="main-content">
-            <!-- Header -->
-            <div class="dashboard-header">
-                <h1>Dashboard</h1>
-                <p>Welcome to your admin dashboard. Manage your school system efficiently.</p>
-            </div>
 
             <!-- Statistics Cards -->
             <div class="stats-container">
@@ -877,8 +948,8 @@ $recent_activities = $conn->query("
                 <!-- Recent Enrollments -->
                 <div class="info-card">
                     <h3><i class="fas fa-history"></i> Recent Enrollments</h3>
-                    <?php if($recent_enrollments && $recent_enrollments->num_rows > 0): ?>
-                        <?php while($enrollment = $recent_enrollments->fetch_assoc()): ?>
+                    <?php if(count($recent_enrollments_list) > 0): ?>
+                        <?php foreach($recent_enrollments_list as $enrollment): ?>
                             <div class="enrollment-item">
                                 <div class="enrollment-avatar">
                                     <?php echo strtoupper(substr($enrollment['fullname'], 0, 1)); ?>
@@ -887,7 +958,7 @@ $recent_activities = $conn->query("
                                     <h4><?php echo htmlspecialchars($enrollment['fullname']); ?></h4>
                                     <p>
                                         <span><?php echo htmlspecialchars($enrollment['grade_name']); ?></span>
-                                        <?php if($enrollment['strand']): ?>
+                                        <?php if(isset($enrollment['strand']) && $enrollment['strand']): ?>
                                             <span>• <?php echo htmlspecialchars($enrollment['strand']); ?></span>
                                         <?php endif; ?>
                                         <span class="status-badge status-<?php echo strtolower($enrollment['status']); ?>">
@@ -900,7 +971,7 @@ $recent_activities = $conn->query("
                                     </span>
                                 </div>
                             </div>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                         <a href="enrollments.php" class="view-all-link">
                             View All Enrollments <i class="fas fa-arrow-right"></i>
                         </a>
@@ -915,9 +986,9 @@ $recent_activities = $conn->query("
                 <!-- Recent Activities -->
                 <div class="info-card">
                     <h3><i class="fas fa-bell"></i> Recent Activities</h3>
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
+                    <?php if(count($recent_activities_list) > 0): ?>
                         <ul class="activity-list">
-                            <?php while($activity = $recent_activities->fetch_assoc()): ?>
+                            <?php foreach($recent_activities_list as $activity): ?>
                                 <li class="activity-item">
                                     <div class="activity-icon">
                                         <i class="fas fa-<?php echo $activity['type'] == 'enrollment' ? 'user-graduate' : 'user-plus'; ?>"></i>
@@ -932,7 +1003,7 @@ $recent_activities = $conn->query("
                                         </div>
                                     </div>
                                 </li>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </ul>
                     <?php else: ?>
                         <div style="text-align: center; padding: 30px; color: var(--text-secondary);">

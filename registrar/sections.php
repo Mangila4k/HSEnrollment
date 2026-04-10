@@ -27,69 +27,110 @@ if(isset($_SESSION['error_message'])) {
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Check if section has students
-    $check_students = $conn->query("SELECT id FROM enrollments WHERE section_id = '$delete_id'");
-    if($check_students && $check_students->num_rows > 0) {
-        $_SESSION['error_message'] = "Cannot delete section with enrolled students. Remove students first.";
-        header("Location: sections.php");
-        exit();
-    }
+    // First, remove section assignment from enrollments
+    $stmt = $conn->prepare("UPDATE enrollments SET section_id = NULL WHERE section_id = ?");
+    $stmt->execute([$delete_id]);
     
-    // Check if section has schedules
-    $check_schedules = $conn->query("SELECT id FROM class_schedules WHERE section_id = '$delete_id'");
-    if($check_schedules && $check_schedules->num_rows > 0) {
-        // Delete schedules first
-        $conn->query("DELETE FROM class_schedules WHERE section_id = '$delete_id'");
-    }
+    // Then delete schedules
+    $stmt = $conn->prepare("DELETE FROM class_schedules WHERE section_id = ?");
+    $stmt->execute([$delete_id]);
     
     // Delete the section
-    $delete = $conn->query("DELETE FROM sections WHERE id = '$delete_id'");
-    
-    if($delete) {
-        $success_message = "Section deleted successfully!";
+    $stmt = $conn->prepare("DELETE FROM sections WHERE id = ?");
+    if($stmt->execute([$delete_id])) {
+        $success_message = "Section deleted successfully! Students have been unassigned.";
     } else {
-        $error_message = "Error deleting section: " . $conn->error;
+        $error_message = "Error deleting section: " . $conn->errorInfo()[2];
     }
 }
 
 // Handle add section
 if(isset($_POST['add_section'])) {
-    $section_name = mysqli_real_escape_string($conn, $_POST['section_name']);
+    $section_name = $_POST['section_name'];
     $grade_id = (int)$_POST['grade_id'];
-    $adviser_id = !empty($_POST['adviser_id']) ? (int)$_POST['adviser_id'] : 'NULL';
-    $school_year = mysqli_real_escape_string($conn, $_POST['school_year']);
+    $adviser_id = !empty($_POST['adviser_id']) ? (int)$_POST['adviser_id'] : null;
     
-    $query = "INSERT INTO sections (section_name, grade_id, adviser_id, school_year) 
-              VALUES ('$section_name', '$grade_id', $adviser_id, '$school_year')";
+    $stmt = $conn->prepare("INSERT INTO sections (section_name, grade_id, adviser_id) VALUES (?, ?, ?)");
     
-    if($conn->query($query)) {
+    if($stmt->execute([$section_name, $grade_id, $adviser_id])) {
         $success_message = "Section added successfully!";
     } else {
-        $error_message = "Error adding section: " . $conn->error;
+        $error_message = "Error adding section: " . $conn->errorInfo()[2];
     }
 }
 
-// Handle edit section
+// Handle edit section with grade change validation
 if(isset($_POST['edit_section'])) {
     $section_id = (int)$_POST['section_id'];
-    $section_name = mysqli_real_escape_string($conn, $_POST['section_name']);
+    $section_name = $_POST['section_name'];
     $grade_id = (int)$_POST['grade_id'];
-    $adviser_id = !empty($_POST['adviser_id']) ? (int)$_POST['adviser_id'] : 'NULL';
+    $adviser_id = !empty($_POST['adviser_id']) ? (int)$_POST['adviser_id'] : null;
     
-    $query = "UPDATE sections SET 
-              section_name = '$section_name',
-              grade_id = '$grade_id',
-              adviser_id = $adviser_id
-              WHERE id = $section_id";
-    
-    if($conn->query($query)) {
-        $success_message = "Section updated successfully!";
-    } else {
-        $error_message = "Error updating section: " . $conn->error;
+    try {
+        // Get current section info
+        $current_section = $conn->prepare("SELECT grade_id, section_name FROM sections WHERE id = ?");
+        $current_section->execute([$section_id]);
+        $current = $current_section->fetch(PDO::FETCH_ASSOC);
+        $old_grade_id = $current['grade_id'];
+        $old_section_name = $current['section_name'];
+        
+        // Get grade names for the message
+        $grade_names = [];
+        $old_grade_stmt = $conn->prepare("SELECT grade_name FROM grade_levels WHERE id = ?");
+        $old_grade_stmt->execute([$old_grade_id]);
+        $grade_names['old'] = $old_grade_stmt->fetch(PDO::FETCH_ASSOC)['grade_name'];
+        
+        $new_grade_stmt = $conn->prepare("SELECT grade_name FROM grade_levels WHERE id = ?");
+        $new_grade_stmt->execute([$grade_id]);
+        $grade_names['new'] = $new_grade_stmt->fetch(PDO::FETCH_ASSOC)['grade_name'];
+        
+        // Update section
+        $update = $conn->prepare("UPDATE sections SET section_name = ?, grade_id = ?, adviser_id = ? WHERE id = ?");
+        $update->execute([$section_name, $grade_id, $adviser_id, $section_id]);
+        
+        $removed_count = 0;
+        
+        // If grade level changed, remove students that don't match the new grade
+        if($old_grade_id != $grade_id) {
+            // Get all students currently in this section
+            $get_students = $conn->prepare("
+                SELECT e.id, e.student_id, e.grade_id 
+                FROM enrollments e 
+                WHERE e.section_id = ? AND e.status = 'Enrolled'
+            ");
+            $get_students->execute([$section_id]);
+            $students_in_section = $get_students->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Remove students whose enrollment grade doesn't match the new section grade
+            foreach($students_in_section as $student) {
+                if($student['grade_id'] != $grade_id) {
+                    $remove_student = $conn->prepare("
+                        UPDATE enrollments 
+                        SET section_id = NULL 
+                        WHERE id = ? AND section_id = ?
+                    ");
+                    $remove_student->execute([$student['id'], $section_id]);
+                    $removed_count++;
+                }
+            }
+            
+            if($removed_count > 0) {
+                $success_message = "Section '<strong>$old_section_name</strong>' updated from <strong>{$grade_names['old']}</strong> to <strong>{$grade_names['new']}</strong>!<br>
+                                   <i class='fas fa-user-minus'></i> <strong>$removed_count student(s)</strong> were removed because their enrollment grade doesn't match <strong>{$grade_names['new']}</strong>.<br>
+                                   <i class='fas fa-info-circle'></i> Only students enrolled in <strong>{$grade_names['new']}</strong> can be assigned to this section.";
+            } else {
+                $success_message = "Section updated from <strong>{$grade_names['old']}</strong> to <strong>{$grade_names['new']}</strong> successfully! No students were affected.";
+            }
+        } else {
+            $success_message = "Section updated successfully!";
+        }
+        
+    } catch(PDOException $e) {
+        $error_message = "Error updating section: " . $e->getMessage();
     }
 }
 
-// Get all sections with details - FIXED: Changed ORDER BY clause
+// Get all sections with details
 $sections_query = "
     SELECT s.*, g.grade_name, g.id as grade_id, u.fullname as adviser_name,
            (SELECT COUNT(*) FROM enrollments WHERE section_id = s.id AND status = 'Enrolled') as student_count
@@ -98,26 +139,43 @@ $sections_query = "
     LEFT JOIN users u ON s.adviser_id = u.id
     ORDER BY g.grade_name, s.section_name
 ";
-$sections = $conn->query($sections_query);
-
-if(!$sections) {
-    die("Error in sections query: " . $conn->error);
-}
+$stmt = $conn->query($sections_query);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY grade_name");
+$stmt = $conn->query("SELECT * FROM grade_levels ORDER BY grade_name");
+$grade_levels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get teachers for adviser selection
-$teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$stmt = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$teachers = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get section for editing if ID is provided
 $edit_section = null;
+$current_grade_name = '';
 if(isset($_GET['edit'])) {
     $edit_id = (int)$_GET['edit'];
-    $edit_result = $conn->query("SELECT * FROM sections WHERE id = $edit_id");
-    if($edit_result && $edit_result->num_rows > 0) {
-        $edit_section = $edit_result->fetch_assoc();
+    $stmt = $conn->prepare("SELECT * FROM sections WHERE id = ?");
+    $stmt->execute([$edit_id]);
+    $edit_section = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Get current grade name
+    if($edit_section && $edit_section['grade_id']) {
+        $grade_stmt = $conn->prepare("SELECT grade_name FROM grade_levels WHERE id = ?");
+        $grade_stmt->execute([$edit_section['grade_id']]);
+        $current_grade = $grade_stmt->fetch(PDO::FETCH_ASSOC);
+        $current_grade_name = $current_grade ? $current_grade['grade_name'] : '';
     }
+}
+
+// Calculate stats
+$total_sections = count($sections);
+$total_students_in_sections = 0;
+$sections_with_adviser = 0;
+
+foreach($sections as $sec) {
+    $total_students_in_sections += $sec['student_count'];
+    if($sec['adviser_name']) $sections_with_adviser++;
 }
 ?>
 
@@ -393,7 +451,7 @@ if(isset($_GET['edit'])) {
         }
 
         .stat-number {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
             color: var(--text-primary);
         }
@@ -665,6 +723,7 @@ if(isset($_GET['edit'])) {
             font-size: 24px;
             cursor: pointer;
             color: var(--text-secondary);
+            text-decoration: none;
         }
 
         .modal-body {
@@ -688,6 +747,20 @@ if(isset($_GET['edit'])) {
             border: 2px solid var(--border-color);
             border-radius: 8px;
             font-size: 14px;
+        }
+
+        .warning-message {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 12px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #856404;
+        }
+
+        .warning-message i {
+            margin-right: 8px;
         }
 
         .modal-footer {
@@ -716,6 +789,7 @@ if(isset($_GET['edit'])) {
             border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
+            text-decoration: none;
         }
 
         @media (max-width: 768px) {
@@ -795,17 +869,6 @@ if(isset($_GET['edit'])) {
 
             <!-- Quick Stats -->
             <div class="stats-container">
-                <?php
-                $total_sections = $sections->num_rows;
-                $total_students_in_sections = 0;
-                $sections_with_adviser = 0;
-                $sections->data_seek(0);
-                while($sec = $sections->fetch_assoc()) {
-                    $total_students_in_sections += $sec['student_count'];
-                    if($sec['adviser_name']) $sections_with_adviser++;
-                }
-                $sections->data_seek(0);
-                ?>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-layer-group"></i></div>
                     <div class="stat-number"><?php echo $total_sections; ?></div>
@@ -834,12 +897,9 @@ if(isset($_GET['edit'])) {
                     <label>Filter by Grade Level</label>
                     <select id="gradeFilter">
                         <option value="">All Grades</option>
-                        <?php 
-                        $grade_levels->data_seek(0);
-                        while($grade = $grade_levels->fetch_assoc()): 
-                        ?>
+                        <?php foreach($grade_levels as $grade): ?>
                             <option value="<?php echo $grade['grade_name']; ?>"><?php echo $grade['grade_name']; ?></option>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     </select>
                 </div>
                 <div class="filter-group">
@@ -850,8 +910,8 @@ if(isset($_GET['edit'])) {
 
             <!-- Sections Grid -->
             <div class="sections-grid" id="sectionsGrid">
-                <?php if($sections && $sections->num_rows > 0): ?>
-                    <?php while($section = $sections->fetch_assoc()): ?>
+                <?php if(count($sections) > 0): ?>
+                    <?php foreach($sections as $section): ?>
                         <div class="section-card" data-grade="<?php echo $section['grade_name']; ?>">
                             <div class="section-header">
                                 <div class="section-icon"><i class="fas fa-users"></i></div>
@@ -887,12 +947,12 @@ if(isset($_GET['edit'])) {
                                     <i class="fas fa-edit"></i> Edit
                                 </a>
                                 <a href="?delete=<?php echo $section['id']; ?>" class="btn-action btn-delete" 
-                                   onclick="return confirm('Delete this section? This will also delete all schedules.')">
+                                   onclick="return confirmDelete(<?php echo $section['student_count']; ?>, '<?php echo htmlspecialchars($section['section_name']); ?>')">
                                     <i class="fas fa-trash"></i> Delete
                                 </a>
                             </div>
                         </div>
-                    <?php endwhile; ?>
+                    <?php endforeach; ?>
                 <?php else: ?>
                     <div class="no-data">
                         <i class="fas fa-layer-group"></i>
@@ -921,31 +981,18 @@ if(isset($_GET['edit'])) {
                         <label>Grade Level</label>
                         <select name="grade_id" required>
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>"><?php echo $grade['grade_name']; ?></option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Class Adviser</label>
                         <select name="adviser_id">
                             <option value="">Select Teacher (Optional)</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
+                            <?php foreach($teachers as $teacher): ?>
                                 <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>School Year</label>
-                        <select name="school_year">
-                            <option value="<?php echo date('Y') . '-' . (date('Y')+1); ?>"><?php echo date('Y') . '-' . (date('Y')+1); ?></option>
-                            <option value="<?php echo (date('Y')-1) . '-' . date('Y'); ?>"><?php echo (date('Y')-1) . '-' . date('Y'); ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                 </div>
@@ -965,38 +1012,55 @@ if(isset($_GET['edit'])) {
                 <h3><i class="fas fa-edit"></i> Edit Section</h3>
                 <a href="sections.php" class="close-modal">&times;</a>
             </div>
-            <form method="POST">
+            <form method="POST" id="editForm">
                 <input type="hidden" name="section_id" value="<?php echo $edit_section['id']; ?>">
                 <div class="modal-body">
+                    <?php
+                    // Check if section has students and show warning
+                    $check_students = $conn->prepare("SELECT COUNT(*) as count FROM enrollments WHERE section_id = ? AND status = 'Enrolled'");
+                    $check_students->execute([$edit_section['id']]);
+                    $student_count = $check_students->fetch(PDO::FETCH_ASSOC)['count'];
+                    
+                    if($student_count > 0):
+                    ?>
+                    <div class="warning-message">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>Warning:</strong> This section has <strong><?php echo $student_count; ?> enrolled student(s)</strong>. 
+                        Changing the grade level will automatically remove students whose enrollment grade doesn't match the new grade.
+                    </div>
+                    <?php endif; ?>
+                    
                     <div class="form-group">
                         <label>Section Name</label>
                         <input type="text" name="section_name" value="<?php echo htmlspecialchars($edit_section['section_name']); ?>" required>
                     </div>
                     <div class="form-group">
                         <label>Grade Level</label>
-                        <select name="grade_id" required>
+                        <select name="grade_id" id="edit_grade_id" required onchange="checkGradeChange()">
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                                $selected = ($grade['id'] == $edit_section['grade_id']) ? 'selected' : '';
-                            ?>
-                                <option value="<?php echo $grade['id']; ?>" <?php echo $selected; ?>><?php echo $grade['grade_name']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($grade_levels as $grade): ?>
+                                <option value="<?php echo $grade['id']; ?>" <?php echo ($grade['id'] == $edit_section['grade_id']) ? 'selected' : ''; ?>>
+                                    <?php echo $grade['grade_name']; ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Class Adviser</label>
                         <select name="adviser_id">
                             <option value="">Select Teacher (Optional)</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                                $selected = ($teacher['id'] == $edit_section['adviser_id']) ? 'selected' : '';
-                            ?>
-                                <option value="<?php echo $teacher['id']; ?>" <?php echo $selected; ?>><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>" <?php echo ($teacher['id'] == $edit_section['adviser_id']) ? 'selected' : ''; ?>>
+                                    <?php echo $teacher['fullname']; ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
+                    </div>
+                    
+                    <div id="gradeChangeWarning" style="display: none;" class="warning-message">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <strong>Grade Level Change Detected!</strong>
+                        <p id="gradeChangeMessage"></p>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1015,6 +1079,34 @@ if(isset($_GET['edit'])) {
 
         function closeAddModal() {
             document.getElementById('addModal').classList.remove('active');
+        }
+
+        // Check grade change and show warning
+        function checkGradeChange() {
+            const gradeSelect = document.getElementById('edit_grade_id');
+            const selectedOption = gradeSelect.options[gradeSelect.selectedIndex];
+            const selectedGrade = selectedOption ? selectedOption.text : '';
+            const warningDiv = document.getElementById('gradeChangeWarning');
+            const messageSpan = document.getElementById('gradeChangeMessage');
+            
+            // Get current grade from PHP variable
+            const currentGrade = '<?php echo addslashes($current_grade_name); ?>';
+            
+            if(selectedGrade && selectedGrade !== currentGrade) {
+                warningDiv.style.display = 'block';
+                messageSpan.innerHTML = `You are changing the grade level from <strong>${currentGrade}</strong> to <strong>${selectedGrade}</strong>. 
+                                         Students whose enrollment grade doesn't match ${selectedGrade} will be automatically removed from this section.`;
+            } else {
+                warningDiv.style.display = 'none';
+            }
+        }
+
+        // Confirm delete function
+        function confirmDelete(studentCount, sectionName) {
+            if (studentCount > 0) {
+                return confirm(`Section "${sectionName}" has ${studentCount} student(s).\n\nDeleting this section will NOT delete the students, but they will lose their section assignment.\n\nAre you sure you want to continue?`);
+            }
+            return confirm(`Are you sure you want to delete section "${sectionName}"?`);
         }
 
         // Filter functionality

@@ -33,10 +33,8 @@ $section_query = "
     WHERE s.id = ?
 ";
 $stmt = $conn->prepare($section_query);
-$stmt->bind_param("i", $section_id);
-$stmt->execute();
-$section = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$stmt->execute([$section_id]);
+$section = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if(!$section) {
     $_SESSION['error_message'] = "Section not found.";
@@ -51,13 +49,13 @@ if(isset($_POST['assign_selected'])) {
     $error_count = 0;
     
     foreach($student_ids as $student_id) {
-        $update = $conn->query("
+        $stmt = $conn->prepare("
             UPDATE enrollments 
-            SET section_id = $section_id 
-            WHERE student_id = $student_id AND status = 'Enrolled'
+            SET section_id = ? 
+            WHERE student_id = ? AND status = 'Enrolled'
         ");
         
-        if($update && $conn->affected_rows > 0) {
+        if($stmt->execute([$section_id, $student_id]) && $stmt->rowCount() > 0) {
             $success_count++;
         } else {
             $error_count++;
@@ -76,13 +74,13 @@ if(isset($_POST['assign_selected'])) {
 if(isset($_POST['assign_student'])) {
     $student_id = (int)$_POST['student_id'];
     
-    $update = $conn->query("
+    $stmt = $conn->prepare("
         UPDATE enrollments 
-        SET section_id = $section_id 
-        WHERE student_id = $student_id AND status = 'Enrolled'
+        SET section_id = ? 
+        WHERE student_id = ? AND status = 'Enrolled'
     ");
     
-    if($update && $conn->affected_rows > 0) {
+    if($stmt->execute([$section_id, $student_id]) && $stmt->rowCount() > 0) {
         $success_message = "Student assigned to section successfully!";
     } else {
         $error_message = "Error assigning student. Make sure the student is enrolled.";
@@ -93,13 +91,13 @@ if(isset($_POST['assign_student'])) {
 if(isset($_GET['remove'])) {
     $student_id = (int)$_GET['remove'];
     
-    $update = $conn->query("
+    $stmt = $conn->prepare("
         UPDATE enrollments 
         SET section_id = NULL 
-        WHERE student_id = $student_id AND section_id = $section_id
+        WHERE student_id = ? AND section_id = ?
     ");
     
-    if($update && $conn->affected_rows > 0) {
+    if($stmt->execute([$student_id, $section_id]) && $stmt->rowCount() > 0) {
         $success_message = "Student removed from section successfully!";
     } else {
         $error_message = "Error removing student.";
@@ -113,13 +111,13 @@ if(isset($_POST['remove_selected'])) {
     $error_count = 0;
     
     foreach($student_ids as $student_id) {
-        $update = $conn->query("
+        $stmt = $conn->prepare("
             UPDATE enrollments 
             SET section_id = NULL 
-            WHERE student_id = $student_id AND section_id = $section_id
+            WHERE student_id = ? AND section_id = ?
         ");
         
-        if($update && $conn->affected_rows > 0) {
+        if($stmt->execute([$student_id, $section_id]) && $stmt->rowCount() > 0) {
             $success_count++;
         } else {
             $error_count++;
@@ -134,40 +132,45 @@ if(isset($_POST['remove_selected'])) {
     }
 }
 
-// Get students in this section - FIXED: Removed enrollment_date
-$section_students = $conn->query("
+// Get students in this section
+$stmt = $conn->prepare("
     SELECT u.id, u.fullname, u.email, u.id_number, e.status, e.school_year
     FROM users u
     JOIN enrollments e ON u.id = e.student_id
-    WHERE e.section_id = $section_id AND u.role = 'Student'
+    WHERE e.section_id = ? AND u.role = 'Student'
     ORDER BY u.fullname
 ");
+$stmt->execute([$section_id]);
+$section_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get available students (enrolled but no section) in the same grade level - FIXED: Removed enrollment_date
-$available_students = $conn->query("
+// Get available students (enrolled but no section) in the same grade level
+$stmt = $conn->prepare("
     SELECT u.id, u.fullname, u.email, u.id_number, e.school_year
     FROM users u
     JOIN enrollments e ON u.id = e.student_id
     WHERE u.role = 'Student' 
     AND e.status = 'Enrolled'
     AND (e.section_id IS NULL OR e.section_id = 0)
-    AND e.grade_id = {$section['grade_id']}
+    AND e.grade_id = ?
     ORDER BY u.fullname
 ");
+$stmt->execute([$section['grade_id']]);
+$available_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all students in this grade level (for reference)
-$all_grade_students = $conn->query("
+$stmt = $conn->prepare("
     SELECT COUNT(*) as total 
     FROM users u
     JOIN enrollments e ON u.id = e.student_id
     WHERE u.role = 'Student' 
     AND e.status = 'Enrolled'
-    AND e.grade_id = {$section['grade_id']}
+    AND e.grade_id = ?
 ");
+$stmt->execute([$section['grade_id']]);
+$total_grade_students = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
 
-$total_grade_students = $all_grade_students->fetch_assoc()['total'];
-$current_section_count = $section_students->num_rows;
-$available_count = $available_students->num_rows;
+$current_section_count = count($section_students);
+$available_count = count($available_students);
 ?>
 
 <!DOCTYPE html>
@@ -836,10 +839,10 @@ $available_count = $available_students->num_rows;
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-users"></i> Current Students</h3>
-                        <span class="badge"><?php echo $section_students->num_rows; ?> students</span>
+                        <span class="badge"><?php echo count($section_students); ?> students</span>
                     </div>
 
-                    <?php if($section_students && $section_students->num_rows > 0): ?>
+                    <?php if(count($section_students) > 0): ?>
                         <form method="POST" id="removeForm">
                             <div class="bulk-actions">
                                 <button type="button" class="btn-bulk remove" onclick="toggleAll('current')">
@@ -858,10 +861,10 @@ $available_count = $available_students->num_rows;
                             <div class="student-list" id="currentList">
                                 <div class="select-all">
                                     <label>
-                                        <input type="checkbox" id="selectAllCurrent"> <strong>Select All</strong> (<?php echo $section_students->num_rows; ?> students)
+                                        <input type="checkbox" id="selectAllCurrent"> <strong>Select All</strong> (<?php echo count($section_students); ?> students)
                                     </label>
                                 </div>
-                                <?php while($student = $section_students->fetch_assoc()): ?>
+                                <?php foreach($section_students as $student): ?>
                                     <div class="student-item">
                                         <input type="checkbox" name="student_ids[]" value="<?php echo $student['id']; ?>" class="student-checkbox current-checkbox">
                                         <div class="student-avatar"><?php echo strtoupper(substr($student['fullname'], 0, 1)); ?></div>
@@ -879,7 +882,7 @@ $available_count = $available_students->num_rows;
                                             <i class="fas fa-times"></i> Remove
                                         </a>
                                     </div>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </div>
                         </form>
                     <?php else: ?>
@@ -894,10 +897,10 @@ $available_count = $available_students->num_rows;
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-user-plus"></i> Available Students</h3>
-                        <span class="badge"><?php echo $available_students->num_rows; ?> available</span>
+                        <span class="badge"><?php echo count($available_students); ?> available</span>
                     </div>
 
-                    <?php if($available_students && $available_students->num_rows > 0): ?>
+                    <?php if(count($available_students) > 0): ?>
                         <form method="POST" id="assignForm">
                             <div class="bulk-actions">
                                 <button type="button" class="btn-bulk assign" onclick="toggleAll('available')">
@@ -916,10 +919,10 @@ $available_count = $available_students->num_rows;
                             <div class="student-list" id="availableList">
                                 <div class="select-all">
                                     <label>
-                                        <input type="checkbox" id="selectAllAvailable"> <strong>Select All</strong> (<?php echo $available_students->num_rows; ?> students)
+                                        <input type="checkbox" id="selectAllAvailable"> <strong>Select All</strong> (<?php echo count($available_students); ?> students)
                                     </label>
                                 </div>
-                                <?php while($student = $available_students->fetch_assoc()): ?>
+                                <?php foreach($available_students as $student): ?>
                                     <div class="student-item">
                                         <input type="checkbox" name="student_ids[]" value="<?php echo $student['id']; ?>" class="student-checkbox available-checkbox">
                                         <div class="student-avatar"><?php echo strtoupper(substr($student['fullname'], 0, 1)); ?></div>
@@ -938,7 +941,7 @@ $available_count = $available_students->num_rows;
                                             </button>
                                         </form>
                                     </div>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </div>
                         </form>
                     <?php else: ?>
@@ -1008,9 +1011,11 @@ $available_count = $available_students->num_rows;
             
             // Update select all checkbox
             if(type === 'current') {
-                document.getElementById('selectAllCurrent').checked = !allChecked;
+                const selectAllCurrent = document.getElementById('selectAllCurrent');
+                if(selectAllCurrent) selectAllCurrent.checked = !allChecked;
             } else {
-                document.getElementById('selectAllAvailable').checked = !allChecked;
+                const selectAllAvailable = document.getElementById('selectAllAvailable');
+                if(selectAllAvailable) selectAllAvailable.checked = !allChecked;
             }
         }
 

@@ -14,13 +14,15 @@ $success_message = '';
 $error_message = '';
 
 // Get section details
-$section = $conn->query("
+$stmt = $conn->prepare("
     SELECT s.*, g.grade_name, u.fullname as adviser_name 
     FROM sections s 
     LEFT JOIN grade_levels g ON s.grade_id = g.id 
     LEFT JOIN users u ON s.adviser_id = u.id
-    WHERE s.id = '$section_id'
-")->fetch_assoc();
+    WHERE s.id = ?
+");
+$stmt->execute([$section_id]);
+$section = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if(!$section) {
     header("Location: sections.php");
@@ -30,8 +32,9 @@ if(!$section) {
 // Handle delete schedule
 if(isset($_GET['delete_schedule'])) {
     $schedule_id = $_GET['delete_schedule'];
-    $delete = $conn->query("DELETE FROM class_schedules WHERE id = '$schedule_id'");
-    if($delete) {
+    $delete = $conn->prepare("DELETE FROM class_schedules WHERE id = ?");
+    $delete->execute([$schedule_id]);
+    if($delete->rowCount() > 0) {
         $success_message = "Schedule deleted successfully!";
     } else {
         $error_message = "Error deleting schedule.";
@@ -46,87 +49,98 @@ if(isset($_POST['add_schedule'])) {
     $time_slot_id = $_POST['time_slot_id'];
     $room = $_POST['room'];
     $school_year = $_POST['school_year'];
-    $quarter = $_POST['quarter']; // <-- changed from semester to quarter
+    $quarter = $_POST['quarter'];
 
     // Check for teacher conflict
-    $teacher_conflict = $conn->query("
+    $teacher_conflict = $conn->prepare("
         SELECT cs.*, d.day_name, ts.start_time, ts.end_time, sub.subject_name, s.section_name
         FROM class_schedules cs
         JOIN days_of_week d ON cs.day_id = d.id
         JOIN time_slots ts ON cs.time_slot_id = ts.id
         JOIN subjects sub ON cs.subject_id = sub.id
         JOIN sections s ON cs.section_id = s.id
-        WHERE cs.teacher_id = '$teacher_id' 
-        AND cs.day_id = '$day_id' 
-        AND cs.time_slot_id = '$time_slot_id'
-        AND cs.school_year = '$school_year'
-        AND cs.quarter = '$quarter'
+        WHERE cs.teacher_id = ? 
+        AND cs.day_id = ? 
+        AND cs.time_slot_id = ?
+        AND cs.school_year = ?
+        AND cs.quarter = ?
     ");
+    $teacher_conflict->execute([$teacher_id, $day_id, $time_slot_id, $school_year, $quarter]);
 
-    if($teacher_conflict->num_rows > 0) {
-        $conflict = $teacher_conflict->fetch_assoc();
+    if($teacher_conflict->rowCount() > 0) {
+        $conflict = $teacher_conflict->fetch(PDO::FETCH_ASSOC);
         $error_message = "Teacher conflict! This teacher is already teaching {$conflict['subject_name']} for {$conflict['section_name']} on {$conflict['day_name']} at " . date('h:i A', strtotime($conflict['start_time']));
     } else {
         // Check for room conflict
-        $room_conflict = $conn->query("
+        $room_conflict = $conn->prepare("
             SELECT cs.*, d.day_name, ts.start_time, ts.end_time, sub.subject_name, s.section_name
             FROM class_schedules cs
             JOIN days_of_week d ON cs.day_id = d.id
             JOIN time_slots ts ON cs.time_slot_id = ts.id
             JOIN subjects sub ON cs.subject_id = sub.id
             JOIN sections s ON cs.section_id = s.id
-            WHERE cs.room = '$room' 
-            AND cs.day_id = '$day_id' 
-            AND cs.time_slot_id = '$time_slot_id'
-            AND cs.school_year = '$school_year'
-            AND cs.quarter = '$quarter'
+            WHERE cs.room = ? 
+            AND cs.day_id = ? 
+            AND cs.time_slot_id = ?
+            AND cs.school_year = ?
+            AND cs.quarter = ?
             AND cs.room IS NOT NULL 
             AND cs.room != ''
         ");
+        $room_conflict->execute([$room, $day_id, $time_slot_id, $school_year, $quarter]);
 
-        if($room_conflict->num_rows > 0) {
-            $conflict = $room_conflict->fetch_assoc();
+        if($room_conflict->rowCount() > 0 && !empty($room)) {
+            $conflict = $room_conflict->fetch(PDO::FETCH_ASSOC);
             $error_message = "Room conflict! Room $room is already used for {$conflict['subject_name']} on {$conflict['day_name']} at " . date('h:i A', strtotime($conflict['start_time']));
         } else {
             // No conflicts, insert schedule
-            $insert = $conn->query("
+            $insert = $conn->prepare("
                 INSERT INTO class_schedules (section_id, subject_id, teacher_id, day_id, time_slot_id, room, school_year, quarter, status)
-                VALUES ('$section_id', '$subject_id', '$teacher_id', '$day_id', '$time_slot_id', '$room', '$school_year', '$quarter', 'active')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
             ");
+            $insert->execute([$section_id, $subject_id, $teacher_id, $day_id, $time_slot_id, $room, $school_year, $quarter]);
             
-            if($insert) {
+            if($insert->rowCount() > 0) {
                 $success_message = "Schedule added successfully!";
+                // Refresh the page to show updated schedules
+                header("Location: create_schedule.php?section_id=$section_id");
+                exit();
             } else {
-                $error_message = "Error adding schedule: " . $conn->error;
+                $error_message = "Error adding schedule.";
             }
         }
     }
 }
 
 // Get subjects for this grade level
-$subjects = $conn->query("
+$subjects_stmt = $conn->prepare("
     SELECT id, subject_name 
     FROM subjects 
-    WHERE grade_id = '{$section['grade_id']}' 
+    WHERE grade_id = ? 
     ORDER BY subject_name
 ");
+$subjects_stmt->execute([$section['grade_id']]);
+$subjects = $subjects_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get teachers
-$teachers = $conn->query("
+$teachers_stmt = $conn->query("
     SELECT id, fullname 
     FROM users 
     WHERE role = 'Teacher' 
     ORDER BY fullname
 ");
+$teachers = $teachers_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get days of week
-$days = $conn->query("SELECT * FROM days_of_week ORDER BY day_order");
+$days_stmt = $conn->query("SELECT * FROM days_of_week ORDER BY day_order");
+$days = $days_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get time slots
-$time_slots = $conn->query("SELECT * FROM time_slots ORDER BY start_time");
+$time_slots_stmt = $conn->query("SELECT * FROM time_slots ORDER BY start_time");
+$time_slots = $time_slots_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get current schedules for this section with all details
-$schedules = $conn->query("
+$schedules_stmt = $conn->prepare("
     SELECT cs.*, sub.subject_name, u.fullname as teacher_name,
            d.day_name, d.day_order, ts.start_time, ts.end_time, ts.slot_name
     FROM class_schedules cs
@@ -134,17 +148,16 @@ $schedules = $conn->query("
     JOIN users u ON cs.teacher_id = u.id
     JOIN days_of_week d ON cs.day_id = d.id
     JOIN time_slots ts ON cs.time_slot_id = ts.id
-    WHERE cs.section_id = '$section_id'
+    WHERE cs.section_id = ?
     ORDER BY d.day_order, ts.start_time
 ");
+$schedules_stmt->execute([$section_id]);
+$schedules = $schedules_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Organize schedules by day for weekly view
 $weekly_schedule = [];
-if($schedules && $schedules->num_rows > 0) {
-    $schedules->data_seek(0);
-    while($sch = $schedules->fetch_assoc()) {
-        $weekly_schedule[$sch['day_name']][] = $sch;
-    }
+foreach($schedules as $sch) {
+    $weekly_schedule[$sch['day_name']][] = $sch;
 }
 ?>
 
@@ -680,6 +693,7 @@ if($schedules && $schedules->num_rows > 0) {
             padding: 8px;
             border-radius: 8px;
             transition: all 0.3s;
+            text-decoration: none;
         }
 
         .delete-btn:hover {
@@ -917,12 +931,12 @@ if($schedules && $schedules->num_rows > 0) {
                             <label>Subject</label>
                             <select name="subject_id" required>
                                 <option value="">Select Subject</option>
-                                <?php if($subjects && $subjects->num_rows > 0): ?>
-                                    <?php while($subject = $subjects->fetch_assoc()): ?>
+                                <?php if(count($subjects) > 0): ?>
+                                    <?php foreach($subjects as $subject): ?>
                                         <option value="<?php echo $subject['id']; ?>">
                                             <?php echo htmlspecialchars($subject['subject_name']); ?>
                                         </option>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 <?php else: ?>
                                     <option value="">No subjects available for this grade level</option>
                                 <?php endif; ?>
@@ -933,12 +947,12 @@ if($schedules && $schedules->num_rows > 0) {
                             <label>Teacher</label>
                             <select name="teacher_id" required>
                                 <option value="">Select Teacher</option>
-                                <?php if($teachers && $teachers->num_rows > 0): ?>
-                                    <?php while($teacher = $teachers->fetch_assoc()): ?>
+                                <?php if(count($teachers) > 0): ?>
+                                    <?php foreach($teachers as $teacher): ?>
                                         <option value="<?php echo $teacher['id']; ?>">
                                             <?php echo htmlspecialchars($teacher['fullname']); ?>
                                         </option>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 <?php endif; ?>
                             </select>
                         </div>
@@ -947,9 +961,9 @@ if($schedules && $schedules->num_rows > 0) {
                             <label>Day</label>
                             <select name="day_id" required>
                                 <option value="">Select Day</option>
-                                <?php while($day = $days->fetch_assoc()): ?>
+                                <?php foreach($days as $day): ?>
                                     <option value="<?php echo $day['id']; ?>"><?php echo $day['day_name']; ?></option>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
@@ -957,12 +971,12 @@ if($schedules && $schedules->num_rows > 0) {
                             <label>Time Slot</label>
                             <select name="time_slot_id" required>
                                 <option value="">Select Time</option>
-                                <?php while($slot = $time_slots->fetch_assoc()): ?>
+                                <?php foreach($time_slots as $slot): ?>
                                     <option value="<?php echo $slot['id']; ?>">
                                         <?php echo date('h:i A', strtotime($slot['start_time'])) . ' - ' . date('h:i A', strtotime($slot['end_time'])); ?>
                                         <?php if($slot['slot_name']): ?>(<?php echo $slot['slot_name']; ?>)<?php endif; ?>
                                     </option>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
@@ -980,12 +994,12 @@ if($schedules && $schedules->num_rows > 0) {
                         </div>
 
                         <div class="form-group">
-                            <label>Semester</label>
-                            <select name="Quarter">
-                                <option value="1st Quarter">1st Quarter</option>
-                                <option value="2nd Quarter">2nd Quarter</option>
-                                <option value="2nd Quarter">2nd Quarter</option>
-                                <option value="2nd Quarter">2nd Quarter</option>
+                            <label>Quarter</label>
+                            <select name="quarter">
+                                <option value="1">1st Quarter</option>
+                                <option value="2">2nd Quarter</option>
+                                <option value="3">3rd Quarter</option>
+                                <option value="4">4th Quarter</option>
                             </select>
                         </div>
 
@@ -1007,15 +1021,12 @@ if($schedules && $schedules->num_rows > 0) {
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-list"></i> Current Schedule</h3>
-                        <span class="grade-badge"><?php echo $schedules->num_rows; ?> subjects</span>
+                        <span class="grade-badge"><?php echo count($schedules); ?> subjects</span>
                     </div>
                     
                     <div class="schedule-list">
-                        <?php if($schedules && $schedules->num_rows > 0): ?>
-                            <?php 
-                            $schedules->data_seek(0);
-                            while($sch = $schedules->fetch_assoc()): 
-                            ?>
+                        <?php if(count($schedules) > 0): ?>
+                            <?php foreach($schedules as $sch): ?>
                                 <div class="schedule-item">
                                     <div class="schedule-info">
                                         <h4><?php echo htmlspecialchars($sch['subject_name']); ?></h4>
@@ -1034,7 +1045,7 @@ if($schedules && $schedules->num_rows > 0) {
                                         <i class="fas fa-trash"></i>
                                     </a>
                                 </div>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         <?php else: ?>
                             <div style="text-align: center; padding: 40px; color: var(--text-secondary);">
                                 <i class="fas fa-calendar-times" style="font-size: 48px; margin-bottom: 15px; opacity: 0.3;"></i>
@@ -1066,9 +1077,9 @@ if($schedules && $schedules->num_rows > 0) {
                         </thead>
                         <tbody>
                             <?php
-                            // Get all time slots for the rows
-                            $time_slots->data_seek(0);
-                            while($slot = $time_slots->fetch_assoc()): 
+                            // Reset time slots for the rows
+                            $time_slots = $time_slots_stmt->fetchAll(PDO::FETCH_ASSOC);
+                            foreach($time_slots as $slot): 
                                 $start = date('h:i A', strtotime($slot['start_time']));
                                 $end = date('h:i A', strtotime($slot['end_time']));
                             ?>
@@ -1105,7 +1116,7 @@ if($schedules && $schedules->num_rows > 0) {
                                     endforeach;
                                     ?>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>

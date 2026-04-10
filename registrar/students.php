@@ -27,27 +27,36 @@ if(isset($_SESSION['error_message'])) {
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Check if student has enrollments
-    $check_enrollments = $conn->query("SELECT id FROM enrollments WHERE student_id = '$delete_id'");
-    if($check_enrollments && $check_enrollments->num_rows > 0) {
-        // Delete enrollments first
-        $conn->query("DELETE FROM enrollments WHERE student_id = '$delete_id'");
-    }
-    
-    // Check if student has attendance records
-    $check_attendance = $conn->query("SELECT id FROM attendance WHERE student_id = '$delete_id'");
-    if($check_attendance && $check_attendance->num_rows > 0) {
-        // Delete attendance records first
-        $conn->query("DELETE FROM attendance WHERE student_id = '$delete_id'");
-    }
-    
-    // Delete the student
-    $delete = $conn->query("DELETE FROM users WHERE id = '$delete_id' AND role = 'Student'");
-    
-    if($delete) {
-        $success_message = "Student deleted successfully!";
-    } else {
-        $error_message = "Error deleting student.";
+    try {
+        // Check if student has enrollments
+        $check_enrollments = $conn->prepare("SELECT id FROM enrollments WHERE student_id = ?");
+        $check_enrollments->execute([$delete_id]);
+        if($check_enrollments->rowCount() > 0) {
+            // Delete enrollments first
+            $delete_enrollments = $conn->prepare("DELETE FROM enrollments WHERE student_id = ?");
+            $delete_enrollments->execute([$delete_id]);
+        }
+        
+        // Check if student has attendance records
+        $check_attendance = $conn->prepare("SELECT id FROM attendance WHERE student_id = ?");
+        $check_attendance->execute([$delete_id]);
+        if($check_attendance->rowCount() > 0) {
+            // Delete attendance records first
+            $delete_attendance = $conn->prepare("DELETE FROM attendance WHERE student_id = ?");
+            $delete_attendance->execute([$delete_id]);
+        }
+        
+        // Delete the student
+        $delete = $conn->prepare("DELETE FROM users WHERE id = ? AND role = 'Student'");
+        $delete->execute([$delete_id]);
+        
+        if($delete->rowCount() > 0) {
+            $success_message = "Student deleted successfully!";
+        } else {
+            $error_message = "Error deleting student.";
+        }
+    } catch(PDOException $e) {
+        $error_message = "Error: " . $e->getMessage();
     }
 }
 
@@ -56,48 +65,108 @@ $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
 
-// Get statistics
-$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'Student'")->fetch_assoc()['count'];
+// Get current school year
+$current_year = date('Y');
+$current_sy = $current_year . '-' . ($current_year + 1);
 
-$enrolled_students = $conn->query("
+// Get statistics
+$total_students_stmt = $conn->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Student'");
+$total_students_stmt->execute();
+$total_students = $total_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$enrolled_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
     WHERE u.role = 'Student' AND e.status = 'Enrolled'
-")->fetch_assoc()['count'];
+");
+$enrolled_students_stmt->execute();
+$enrolled_students = $enrolled_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-$pending_students = $conn->query("
+$pending_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
     WHERE u.role = 'Student' AND e.status = 'Pending'
-")->fetch_assoc()['count'];
+");
+$pending_students_stmt->execute();
+$pending_students = $pending_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-$rejected_students = $conn->query("
+$rejected_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
     WHERE u.role = 'Student' AND e.status = 'Rejected'
-")->fetch_assoc()['count'];
+");
+$rejected_students_stmt->execute();
+$rejected_students = $rejected_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 $no_enrollment = $total_students - ($enrolled_students + $pending_students + $rejected_students);
 
-// Initialize Student Classifier
-require_once '../includes/StudentClassifier.php';
-$classifier = new StudentClassifier($conn);
+// Build the query to get all students with their enrollment info
+$query = "
+    SELECT u.*, 
+           e.id as enrollment_id,
+           e.grade_id,
+           e.status as enrollment_status,
+           e.strand,
+           e.school_year,
+           e.created_at as enrolled_date,
+           g.grade_name,
+           (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id) as total_enrollments
+    FROM users u
+    LEFT JOIN enrollments e ON u.id = e.student_id AND e.school_year = ?
+    LEFT JOIN grade_levels g ON e.grade_id = g.id
+    WHERE u.role = 'Student'
+";
 
-// Get student statistics with classification
-$student_stats = $classifier->getStudentStats();
+$params = [$current_sy];
 
-// Get all students with classification for display
-$all_students = $classifier->getAllStudentsWithClassification([
-    'grade' => $grade_filter,
-    'status' => $status_filter,
-    'search' => $search_query
-]);
+if(!empty($grade_filter)) {
+    $query .= " AND e.grade_id = ?";
+    $params[] = $grade_filter;
+}
+
+if(!empty($status_filter)) {
+    $query .= " AND e.status = ?";
+    $params[] = $status_filter;
+}
+
+if(!empty($search_query)) {
+    $query .= " AND (u.fullname LIKE ? OR u.email LIKE ? OR u.id_number LIKE ?)";
+    $search_term = "%$search_query%";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
+}
+
+$query .= " ORDER BY u.created_at DESC";
+
+$stmt = $conn->prepare($query);
+$stmt->execute($params);
+$all_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Calculate student statistics for classification
+$new_students = 0;
+$old_students = 0;
+
+foreach($all_students as $student) {
+    if($student['total_enrollments'] == 1 && !empty($student['enrollment_id'])) {
+        $new_students++;
+    } elseif($student['total_enrollments'] > 1 && !empty($student['enrollment_id'])) {
+        $old_students++;
+    }
+}
+
+$student_stats = [
+    'new_students' => $new_students,
+    'old_students' => $old_students
+];
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -1040,18 +1109,11 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                     <div class="filter-group">
                         <select name="grade" class="filter-select">
                             <option value="">All Grades</option>
-                            <?php 
-                            if($grade_levels) {
-                                $grade_levels->data_seek(0);
-                                while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
                                     <?php echo $grade['grade_name']; ?>
                                 </option>
-                            <?php 
-                                endwhile;
-                            } 
-                            ?>
+                            <?php endforeach; ?>
                         </select>
 
                         <select name="status" class="filter-select">
@@ -1110,12 +1172,28 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if(!empty($all_students)): ?>
-                            <?php foreach($all_students as $student): ?>
-                                <tr style="<?php echo $student['is_old'] ? 'background-color: rgba(40, 167, 69, 0.05);' : 'background-color: rgba(0, 123, 255, 0.05);'; ?>">
+                        <?php if(count($all_students) > 0): ?>
+                            <?php foreach($all_students as $student): 
+                                // Determine if student is old or new
+                                $is_old = ($student['total_enrollments'] > 1 && !empty($student['enrollment_id']));
+                                $student_badge = '';
+                                $enrollment_years = '';
+                                
+                                if($is_old) {
+                                    $student_badge = '<span class="badge" style="background: #28a745; color: white;">Old Student</span>';
+                                    $student_color = '#28a745';
+                                } elseif(!empty($student['enrollment_id'])) {
+                                    $student_badge = '<span class="badge" style="background: #007bff; color: white;">New Student</span>';
+                                    $student_color = '#007bff';
+                                } else {
+                                    $student_badge = '<span class="badge badge-none">No Enrollment</span>';
+                                    $student_color = '#6c757d';
+                                }
+                            ?>
+                                <tr>
                                     <td>
                                         <div class="student-info">
-                                            <div class="student-avatar" style="<?php echo $student['is_old'] ? 'background: #28a745;' : 'background: #007bff;'; ?>">
+                                            <div class="student-avatar" style="background: <?php echo $student_color; ?>;">
                                                 <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
                                             </div>
                                             <div class="student-details">
@@ -1152,12 +1230,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <?php echo $student['student_badge']; ?>
-                                        <?php if(!empty($student['enrollment_years'])): ?>
-                                            <div style="font-size: 10px; margin-top: 5px; color: #666;">
-                                                <?php echo $student['enrollment_years']; ?>
-                                            </div>
-                                        <?php endif; ?>
+                                        <?php echo $student_badge; ?>
                                     </td>
                                     <td>
                                         <?php if($student['school_year']): ?>

@@ -24,19 +24,24 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get registrar details
+// Get registrar details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Registrar'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $registrar_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$registrar = $result->fetch_assoc();
-$stmt->close();
+$stmt->execute([$registrar_id]);
+$registrar = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // Get statistics
-$enrollments_processed = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status IN ('Enrolled', 'Rejected')")->fetch_assoc()['count'];
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'")->fetch_assoc()['count'];
-$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'")->fetch_assoc()['count'];
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status IN ('Enrolled', 'Rejected')");
+$enrollments_processed = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'");
+$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'");
+$total_students = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+// Calculate processing rate
+$processing_rate = $total_students > 0 ? round(($enrollments_processed / $total_students) * 100) : 0;
 
 // Handle profile update
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -44,8 +49,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         $fullname = trim($_POST['fullname']);
         $email = trim($_POST['email']);
         $id_number = !empty($_POST['id_number']) ? trim($_POST['id_number']) : null;
-        $phone = trim($_POST['phone']);
-        $address = trim($_POST['address']);
         
         // Validation
         $errors = [];
@@ -63,36 +66,30 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Check if email already exists (excluding current registrar)
         if(empty($errors)) {
             $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $registrar_id);
-            $check_email->execute();
-            $check_email->store_result();
+            $check_email->execute([$email, $registrar_id]);
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
         }
         
         // Check if ID number already exists (if provided and excluding current registrar)
         if(empty($errors) && $id_number) {
             $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $registrar_id);
-            $check_id->execute();
-            $check_id->store_result();
+            $check_id->execute([$id_number, $registrar_id]);
             
-            if($check_id->num_rows > 0) {
+            if($check_id->rowCount() > 0) {
                 $errors[] = "ID number already exists for another user";
             }
-            $check_id->close();
         }
         
         // If no errors, update the profile
         if(empty($errors)) {
             $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $registrar_id);
+            $update_stmt->execute([$fullname, $email, $id_number, $registrar_id]);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) {
                 // Update session
                 $_SESSION['user']['fullname'] = $fullname;
                 $_SESSION['user']['email'] = $email;
@@ -102,9 +99,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 header("Location: profile.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -145,16 +141,15 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
             $update_query = "UPDATE users SET password = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $registrar_id);
+            $update_stmt->execute([$hashed_password, $registrar_id]);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) {
                 $_SESSION['success_message'] = "Password changed successfully!";
                 header("Location: profile.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -622,11 +617,12 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             overflow: hidden;
         }
 
-
         .progress-fill {
             height: 100%;
+            width: 0;
             background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             border-radius: 4px;
+            transition: width 0.5s ease;
         }
 
         /* Form Card */
@@ -885,6 +881,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -998,10 +995,10 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                         <div class="progress-container">
                             <div class="progress-label">
                                 <span>Processing Rate</span>
-                                <span><?php echo $total_students > 0 ? round(($enrollments_processed / $total_students) * 100) : 0; ?>%</span>
+                                <span><?php echo $processing_rate; ?>%</span>
                             </div>
                             <div class="progress-bar">
-                                <div class="progress-fill"></div>
+                                <div class="progress-fill" style="width: <?php echo $processing_rate; ?>%;"></div>
                             </div>
                         </div>
                     </div>
@@ -1020,21 +1017,12 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                                 <input type="email" name="email" value="<?php echo htmlspecialchars($registrar['email']); ?>" required>
                             </div>
 
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Employee ID</label>
-                                    <input type="text" name="id_number" value="<?php echo htmlspecialchars($registrar['id_number'] ?? ''); ?>" placeholder="Enter your employee ID">
-                                </div>
-
-                                <div class="form-group">
-                                    <label>Phone Number</label>
-                                    <input type="text" name="phone" value="<?php echo isset($_POST['phone']) ? htmlspecialchars($_POST['phone']) : ''; ?>" placeholder="Enter your phone number">
-                                </div>
-                            </div>
-
                             <div class="form-group">
-                                <label>Address</label>
-                                <textarea name="address" rows="3" placeholder="Enter your complete address"><?php echo isset($_POST['address']) ? htmlspecialchars($_POST['address']) : ''; ?></textarea>
+                                <label>Employee ID</label>
+                                <input type="text" name="id_number" value="<?php echo htmlspecialchars($registrar['id_number'] ?? ''); ?>" placeholder="Enter your employee ID">
+                                <div class="form-hint" style="font-size: 12px; color: #6c757d; margin-top: 5px;">
+                                    <i class="fas fa-info-circle"></i> Employee ID is optional
+                                </div>
                             </div>
 
                             <button type="submit" name="update_profile" class="btn-submit">
@@ -1096,6 +1084,15 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
     </div>
 
     <script>
+        // Set progress bar width after page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const progressFill = document.querySelector('.progress-fill');
+            if(progressFill) {
+                const width = <?php echo $processing_rate; ?>;
+                progressFill.style.width = width + '%';
+            }
+        });
+
         // Toggle password fields
         const changePasswordCheckbox = document.getElementById('change_password_checkbox');
         const passwordFields = document.getElementById('passwordFields');

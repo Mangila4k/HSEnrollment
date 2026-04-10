@@ -25,31 +25,35 @@ if(isset($_SESSION['error_message'])) {
 }
 
 // Get teacher details
-$query = "SELECT * FROM users WHERE id = ? AND role = 'Teacher'";
+$query = "SELECT * FROM users WHERE id = :teacher_id AND role = 'Teacher'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$teacher = $result->fetch_assoc();
-$stmt->close();
+$stmt->execute([':teacher_id' => $teacher_id]);
+$teacher = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt->closeCursor();
 
 // Get teacher's sections (where they are adviser)
 $sections_query = "
     SELECT s.*, g.grade_name
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
-    WHERE s.adviser_id = ?
+    WHERE s.adviser_id = :teacher_id
     ORDER BY g.id, s.section_name
 ";
 $stmt = $conn->prepare($sections_query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$sections = $stmt->get_result();
-$section_count = $sections->num_rows;
-$stmt->close();
+$stmt->execute([':teacher_id' => $teacher_id]);
+$sections = $stmt;
+$section_count = $stmt->rowCount();
+$stmt->closeCursor();
 
-// Get teacher's subjects count
-$subjects_count = $conn->query("SELECT COUNT(*) as count FROM subjects")->fetch_assoc()['count']; // Placeholder - adjust based on your schema
+// Get teacher's subjects count (through class_schedules)
+$subjects_query = "SELECT COUNT(DISTINCT cs.subject_id) as count 
+                   FROM class_schedules cs 
+                   WHERE cs.teacher_id = :teacher_id";
+$stmt = $conn->prepare($subjects_query);
+$stmt->execute([':teacher_id' => $teacher_id]);
+$subjects_result = $stmt->fetch(PDO::FETCH_ASSOC);
+$subjects_count = $subjects_result['count'] ?? 0;
+$stmt->closeCursor();
 
 // Handle profile update
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -57,9 +61,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         $fullname = trim($_POST['fullname']);
         $email = trim($_POST['email']);
         $id_number = !empty($_POST['id_number']) ? trim($_POST['id_number']) : null;
-        $specialization = trim($_POST['specialization']);
-        $phone = trim($_POST['phone']);
-        $address = trim($_POST['address']);
         
         // Validation
         $errors = [];
@@ -76,37 +77,37 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         
         // Check if email already exists (excluding current teacher)
         if(empty($errors)) {
-            $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $teacher_id);
-            $check_email->execute();
-            $check_email->store_result();
+            $check_email = $conn->prepare("SELECT id FROM users WHERE email = :email AND id != :teacher_id");
+            $check_email->execute([':email' => $email, ':teacher_id' => $teacher_id]);
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
+            $check_email->closeCursor();
         }
         
         // Check if ID number already exists (if provided and excluding current teacher)
         if(empty($errors) && $id_number) {
-            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $teacher_id);
-            $check_id->execute();
-            $check_id->store_result();
+            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = :id_number AND id != :teacher_id");
+            $check_id->execute([':id_number' => $id_number, ':teacher_id' => $teacher_id]);
             
-            if($check_id->num_rows > 0) {
+            if($check_id->rowCount() > 0) {
                 $errors[] = "ID number already exists for another user";
             }
-            $check_id->close();
+            $check_id->closeCursor();
         }
         
         // If no errors, update the profile
         if(empty($errors)) {
-            $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
+            $update_query = "UPDATE users SET fullname = :fullname, email = :email, id_number = :id_number WHERE id = :teacher_id";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $teacher_id);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->execute([
+                ':fullname' => $fullname,
+                ':email' => $email,
+                ':id_number' => $id_number,
+                ':teacher_id' => $teacher_id
+            ])) {
                 // Update session
                 $_SESSION['user']['fullname'] = $fullname;
                 $_SESSION['user']['email'] = $email;
@@ -116,9 +117,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 header("Location: profile.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error occurred";
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -157,18 +157,19 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // If no errors, update password
         if(empty($errors)) {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
-            $update_query = "UPDATE users SET password = ? WHERE id = ?";
+            $update_query = "UPDATE users SET password = :password WHERE id = :teacher_id";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $teacher_id);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->execute([
+                ':password' => $hashed_password,
+                ':teacher_id' => $teacher_id
+            ])) {
                 $_SESSION['success_message'] = "Password changed successfully!";
                 header("Location: profile.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error occurred";
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -836,6 +837,7 @@ $account_created = $teacher['created_at'];
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>Attendance QR</span></a></li>
                     <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
                     <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
@@ -892,13 +894,8 @@ $account_created = $teacher['created_at'];
                                 <div class="stat-label">Sections</div>
                             </div>
                             <div class="stat-item">
-                                <div class="stat-value">
-                                    <?php 
-                                    $days = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
-                                    echo $days;
-                                    ?>
-                                </div>
-                                <div class="stat-label">Days Active</div>
+                                <div class="stat-value"><?php echo $subjects_count; ?></div>
+                                <div class="stat-label">Subjects</div>
                             </div>
                         </div>
 
@@ -944,8 +941,9 @@ $account_created = $teacher['created_at'];
                                 </div>
                                 <div class="section-tags" style="margin-left: 52px;">
                                     <?php 
-                                    $sections->data_seek(0);
-                                    while($section = $sections->fetch_assoc()): 
+                                    // Reset and fetch sections
+                                    $sections->execute([':teacher_id' => $teacher_id]);
+                                    while($section = $sections->fetch(PDO::FETCH_ASSOC)): 
                                     ?>
                                         <span class="section-tag">
                                             <i class="fas fa-users"></i>

@@ -25,16 +25,24 @@ if(isset($_SESSION['error_message'])) {
 }
 
 // Get enrollment statistics
-$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments")->fetch_assoc()['count'];
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'")->fetch_assoc()['count'];
-$enrolled_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'")->fetch_assoc()['count'];
-$rejected_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'")->fetch_assoc()['count'];
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments");
+$total_enrollments = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'");
+$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'");
+$enrolled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'");
+$rejected_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get student statistics
-$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'")->fetch_assoc()['count'];
+$stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'");
+$total_students = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get recent enrollments
-$recent_enrollments = $conn->query("
+$stmt = $conn->prepare("
     SELECT e.*, u.fullname, u.email, u.id_number, g.grade_name 
     FROM enrollments e 
     LEFT JOIN users u ON e.student_id = u.id 
@@ -42,6 +50,8 @@ $recent_enrollments = $conn->query("
     ORDER BY e.id DESC 
     LIMIT 5
 ");
+$stmt->execute();
+$recent_enrollments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get enrollment trends by month (last 6 months)
 $trends_query = "
@@ -56,19 +66,21 @@ $trends_query = "
     GROUP BY DATE_FORMAT(created_at, '%Y-%m')
     ORDER BY month DESC
 ";
-$trends = $conn->query($trends_query);
+$stmt = $conn->query($trends_query);
+$trends = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get grade level distribution
-$grade_distribution = $conn->query("
+$stmt = $conn->query("
     SELECT g.grade_name, COUNT(e.id) as count
     FROM grade_levels g
     LEFT JOIN enrollments e ON g.id = e.grade_id AND e.status = 'Enrolled'
     GROUP BY g.id
     ORDER BY g.id
 ");
+$grade_distribution = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get recent activities - FIXED: Added table aliases for created_at
-$recent_activities = $conn->query("
+// Get recent activities
+$activities_query = "
     (SELECT 'enrollment' as type, e.created_at, CONCAT('New enrollment from ', u.fullname) as description
      FROM enrollments e
      JOIN users u ON e.student_id = u.id
@@ -80,7 +92,9 @@ $recent_activities = $conn->query("
      WHERE e.status IN ('Enrolled', 'Rejected')
      ORDER BY e.created_at DESC LIMIT 3)
     ORDER BY created_at DESC LIMIT 5
-");
+";
+$stmt = $conn->query($activities_query);
+$recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Calculate approval rate
 $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enrollments) * 100, 2) : 0;
@@ -569,6 +583,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
 
         .badge {
@@ -654,46 +669,19 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
             gap: 5px;
         }
 
-        /* Grade Distribution */
-        .grade-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .grade-item:last-child {
-            border-bottom: none;
-        }
-
-        .grade-name {
-            flex: 1;
-            font-weight: 500;
-        }
-
-        .grade-count {
-            font-weight: 600;
-            color: #0B4F2E;
-        }
-
-        .grade-bar {
-            width: 100px;
-            height: 8px;
-            background: #e9ecef;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .grade-bar-fill {
-            height: 100%;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 4px;
-        }
-
         /* Quick Actions */
         .quick-actions {
             margin-top: 30px;
+        }
+
+        .quick-actions h3 {
+            color: var(--text-primary);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
         .action-buttons {
@@ -829,7 +817,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
         <div class="sidebar">
             <h2>
                 <i class="fas fa-check-circle"></i>
-                <span>PNSH</span>
+                <span>PNHS</span>
             </h2>
             
             <div class="registrar-info">
@@ -846,6 +834,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                     <li><a href="dashboard.php" class="active"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -970,9 +959,9 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                 <!-- Recent Enrollments -->
                 <div class="info-card">
                     <h3><i class="fas fa-history"></i> Recent Enrollments</h3>
-                    <?php if($recent_enrollments && $recent_enrollments->num_rows > 0): ?>
+                    <?php if(count($recent_enrollments) > 0): ?>
                         <div class="enrollment-list">
-                            <?php while($enrollment = $recent_enrollments->fetch_assoc()): ?>
+                            <?php foreach($recent_enrollments as $enrollment): ?>
                                 <div class="enrollment-item">
                                     <div class="enrollment-avatar">
                                         <?php echo strtoupper(substr($enrollment['fullname'], 0, 1)); ?>
@@ -994,7 +983,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                                         </span>
                                     </div>
                                 </div>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </div>
                         <a href="enrollments.php" class="view-all-link">
                             View All Enrollments <i class="fas fa-arrow-right"></i>
@@ -1010,9 +999,9 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                 <!-- Recent Activities -->
                 <div class="info-card">
                     <h3><i class="fas fa-bell"></i> Recent Activities</h3>
-                    <?php if($recent_activities && $recent_activities->num_rows > 0): ?>
+                    <?php if(count($recent_activities) > 0): ?>
                         <div class="activity-list">
-                            <?php while($activity = $recent_activities->fetch_assoc()): ?>
+                            <?php foreach($recent_activities as $activity): ?>
                                 <div class="activity-item">
                                     <div class="activity-icon">
                                         <i class="fas fa-<?php echo $activity['type'] == 'enrollment' ? 'user-plus' : 'sync-alt'; ?>"></i>
@@ -1027,7 +1016,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                                         </div>
                                     </div>
                                 </div>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </div>
                     <?php else: ?>
                         <div class="no-data">
@@ -1040,9 +1029,7 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
 
             <!-- Quick Actions -->
             <div class="quick-actions">
-                <h3 style="color: var(--text-primary); font-size: 18px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
-                    <i class="fas fa-bolt" style="color: #0B4F2E;"></i> Quick Actions
-                </h3>
+                <h3><i class="fas fa-bolt" style="color: #0B4F2E;"></i> Quick Actions</h3>
                 <div class="action-buttons">
                     <a href="enrollments.php" class="action-btn">
                         <div class="action-icon">
@@ -1061,6 +1048,16 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
                         <div class="action-content">
                             <h4>Student Records</h4>
                             <p>Manage student information</p>
+                        </div>
+                    </a>
+                    
+                    <a href="sections.php" class="action-btn">
+                        <div class="action-icon">
+                            <i class="fas fa-layer-group"></i>
+                        </div>
+                        <div class="action-content">
+                            <h4>Manage Sections</h4>
+                            <p>Create and assign sections</p>
                         </div>
                     </a>
                     
@@ -1098,13 +1095,12 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
         $enrolled_data = [];
         $rejected_data = [];
         
-        if($trends && $trends->num_rows > 0) {
-            $trends->data_seek(0);
-            while($row = $trends->fetch_assoc()) {
+        if(count($trends) > 0) {
+            foreach($trends as $row) {
                 $months[] = date('M Y', strtotime($row['month'] . '-01'));
-                $pending_data[] = $row['pending'];
-                $enrolled_data[] = $row['enrolled'];
-                $rejected_data[] = $row['rejected'];
+                $pending_data[] = (int)$row['pending'];
+                $enrolled_data[] = (int)$row['enrolled'];
+                $rejected_data[] = (int)$row['rejected'];
             }
         } else {
             // Default data if no trends
@@ -1182,9 +1178,8 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
         $grade_labels = [];
         $grade_counts = [];
         
-        if($grade_distribution && $grade_distribution->num_rows > 0) {
-            $grade_distribution->data_seek(0);
-            while($row = $grade_distribution->fetch_assoc()) {
+        if(count($grade_distribution) > 0) {
+            foreach($grade_distribution as $row) {
                 $grade_labels[] = $row['grade_name'];
                 $grade_counts[] = (int)$row['count'];
             }
@@ -1239,8 +1234,5 @@ $approval_rate = $total_enrollments > 0 ? round(($enrolled_count / $total_enroll
             });
         }, 5000);
     </script>
-    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
-    <i class="fas fa-layer-group"></i><span>Sections</span>
-</a></li>
 </body>
 </html>

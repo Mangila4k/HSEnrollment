@@ -36,17 +36,13 @@ $query = "
 ";
 
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $enrollment_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$enrollment_id]);
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$enrollment) {
     header("Location: enrollments.php");
     exit();
 }
-
-$enrollment = $result->fetch_assoc();
-$stmt->close();
 
 // Get enrollment history (previous enrollments of the same student)
 $history_query = "
@@ -58,10 +54,8 @@ $history_query = "
     LIMIT 5
 ";
 $stmt = $conn->prepare($history_query);
-$stmt->bind_param("ii", $enrollment['student_id'], $enrollment_id);
-$stmt->execute();
-$history = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$enrollment['student_id'], $enrollment_id]);
+$history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get student's attendance records
 $attendance_query = "
@@ -73,10 +67,8 @@ $attendance_query = "
     LIMIT 5
 ";
 $stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $enrollment['student_id']);
-$stmt->execute();
-$attendance = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$enrollment['student_id']]);
+$attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get available sections for this grade level (for potential assignment)
 $sections_query = "
@@ -87,10 +79,8 @@ $sections_query = "
     ORDER BY s.section_name
 ";
 $stmt = $conn->prepare($sections_query);
-$stmt->bind_param("i", $enrollment['grade_id']);
-$stmt->execute();
-$sections = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$enrollment['grade_id']]);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Handle status update
 if(isset($_POST['update_status'])) {
@@ -99,16 +89,14 @@ if(isset($_POST['update_status'])) {
     
     $update_query = "UPDATE enrollments SET status = ? WHERE id = ?";
     $stmt = $conn->prepare($update_query);
-    $stmt->bind_param("si", $new_status, $enrollment_id);
     
-    if($stmt->execute()) {
+    if($stmt->execute([$new_status, $enrollment_id])) {
         $_SESSION['success_message'] = "Enrollment status updated successfully!";
         header("Location: view_enrollment.php?id=" . $enrollment_id);
         exit();
     } else {
-        $error_message = "Error updating status: " . $conn->error;
+        $error_message = "Error updating status";
     }
-    $stmt->close();
 }
 
 // Handle section assignment
@@ -124,8 +112,14 @@ if(isset($_POST['assign_section'])) {
 
 // Calculate student statistics
 $student_id = $enrollment['student_id'];
-$total_attendance = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE student_id = '$student_id'")->fetch_assoc()['count'];
-$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE student_id = '$student_id'")->fetch_assoc()['count'];
+
+$total_attendance_stmt = $conn->prepare("SELECT COUNT(*) as count FROM attendance WHERE student_id = ?");
+$total_attendance_stmt->execute([$student_id]);
+$total_attendance = $total_attendance_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$total_enrollments_stmt = $conn->prepare("SELECT COUNT(*) as count FROM enrollments WHERE student_id = ?");
+$total_enrollments_stmt->execute([$student_id]);
+$total_enrollments = $total_enrollments_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 ?>
 
 <!DOCTYPE html>
@@ -1055,17 +1049,6 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                 </a>
             </div>
 
-            <!-- Welcome Card -->
-            <div class="welcome-card">
-                <div class="welcome-text">
-                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?>! 👋</h2>
-                    <p><i class="fas fa-calendar"></i> <?php echo date('l, F j, Y'); ?></p>
-                </div>
-                <a href="../auth/logout.php" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> Logout
-                </a>
-            </div>
-
             <!-- Alert Messages -->
             <?php if(isset($_SESSION['success_message'])): ?>
                 <div class="alert alert-success">
@@ -1224,7 +1207,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
             </div>
 
             <!-- Available Sections -->
-            <?php if($enrollment['status'] == 'Enrolled' && $sections && $sections->num_rows > 0): ?>
+            <?php if($enrollment['status'] == 'Enrolled' && count($sections) > 0): ?>
             <div class="detail-card">
                 <div class="card-header">
                     <h3><i class="fas fa-layer-group"></i> Available Sections</h3>
@@ -1240,7 +1223,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                             </tr>
                         </thead>
                         <tbody>
-                            <?php while($section = $sections->fetch_assoc()): ?>
+                            <?php foreach($sections as $section): ?>
                                 <tr>
                                     <td><?php echo htmlspecialchars($section['section_name']); ?></td>
                                     <td><?php echo htmlspecialchars($section['grade_name']); ?></td>
@@ -1253,7 +1236,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                                         </form>
                                     </td>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
@@ -1266,7 +1249,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                     <h3><i class="fas fa-history"></i> Enrollment History</h3>
                 </div>
 
-                <?php if($history && $history->num_rows > 0): ?>
+                <?php if(count($history) > 0): ?>
                     <div class="table-container">
                         <table class="history-table">
                             <thead>
@@ -1280,7 +1263,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($row = $history->fetch_assoc()): ?>
+                                <?php foreach($history as $row): ?>
                                     <tr>
                                         <td><?php echo htmlspecialchars($row['school_year']); ?></td>
                                         <td><?php echo htmlspecialchars($row['grade_name']); ?></td>
@@ -1297,7 +1280,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                                             </a>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1318,7 +1301,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                     </a>
                 </div>
 
-                <?php if($attendance && $attendance->num_rows > 0): ?>
+                <?php if(count($attendance) > 0): ?>
                     <div class="table-container">
                         <table class="attendance-table">
                             <thead>
@@ -1329,7 +1312,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($row = $attendance->fetch_assoc()): ?>
+                                <?php foreach($attendance as $row): ?>
                                     <tr>
                                         <td><?php echo date('M d, Y', strtotime($row['date'])); ?></td>
                                         <td><?php echo htmlspecialchars($row['subject_name']); ?></td>
@@ -1339,7 +1322,7 @@ $total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHE
                                             </span>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>

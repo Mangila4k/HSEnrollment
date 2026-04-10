@@ -9,8 +9,15 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
 }
 
 $admin_name = $_SESSION['user']['fullname'];
+$admin_id = $_SESSION['user']['id'];
 $success_message = '';
 $error_message = '';
+
+// Get admin profile picture
+$admin_stmt = $conn->prepare("SELECT profile_picture FROM users WHERE id = ?");
+$admin_stmt->execute([$admin_id]);
+$admin_data = $admin_stmt->fetch(PDO::FETCH_ASSOC);
+$profile_picture = $admin_data['profile_picture'] ?? null;
 
 // Check for session messages
 if(isset($_SESSION['success_message'])) {
@@ -27,27 +34,36 @@ if(isset($_SESSION['error_message'])) {
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Check if student has enrollments
-    $check_enrollments = $conn->query("SELECT id FROM enrollments WHERE student_id = '$delete_id'");
-    if($check_enrollments && $check_enrollments->num_rows > 0) {
-        // Delete enrollments first
-        $conn->query("DELETE FROM enrollments WHERE student_id = '$delete_id'");
-    }
-    
-    // Check if student has attendance records
-    $check_attendance = $conn->query("SELECT id FROM attendance WHERE student_id = '$delete_id'");
-    if($check_attendance && $check_attendance->num_rows > 0) {
-        // Delete attendance records first
-        $conn->query("DELETE FROM attendance WHERE student_id = '$delete_id'");
-    }
-    
-    // Delete the student
-    $delete = $conn->query("DELETE FROM users WHERE id = '$delete_id' AND role = 'Student'");
-    
-    if($delete) {
-        $success_message = "Student deleted successfully!";
-    } else {
-        $error_message = "Error deleting student.";
+    try {
+        // Check if student has enrollments
+        $check_enrollments = $conn->prepare("SELECT id FROM enrollments WHERE student_id = ?");
+        $check_enrollments->execute([$delete_id]);
+        if($check_enrollments->rowCount() > 0) {
+            // Delete enrollments first
+            $delete_enrollments = $conn->prepare("DELETE FROM enrollments WHERE student_id = ?");
+            $delete_enrollments->execute([$delete_id]);
+        }
+        
+        // Check if student has attendance records
+        $check_attendance = $conn->prepare("SELECT id FROM attendance WHERE student_id = ?");
+        $check_attendance->execute([$delete_id]);
+        if($check_attendance->rowCount() > 0) {
+            // Delete attendance records first
+            $delete_attendance = $conn->prepare("DELETE FROM attendance WHERE student_id = ?");
+            $delete_attendance->execute([$delete_id]);
+        }
+        
+        // Delete the student
+        $delete = $conn->prepare("DELETE FROM users WHERE id = ? AND role = 'Student'");
+        $delete->execute([$delete_id]);
+        
+        if($delete->rowCount() > 0) {
+            $success_message = "Student deleted successfully!";
+        } else {
+            $error_message = "Error deleting student.";
+        }
+    } catch(PDOException $e) {
+        $error_message = "Error: " . $e->getMessage();
     }
 }
 
@@ -55,8 +71,14 @@ if(isset($_GET['delete'])) {
 $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
+$enrollee_type = isset($_GET['type']) ? $_GET['type'] : 'all'; // all, new, old, not_enrolled
 
-// Build the query
+// Get current school year
+$current_year = date('Y');
+$current_sy = $current_year . '-' . ($current_year + 1);
+$previous_sy = ($current_year - 1) . '-' . $current_year;
+
+// Build the query to identify new vs old students vs not enrolled
 $query = "
     SELECT u.*, 
            e.id as enrollment_id,
@@ -65,57 +87,129 @@ $query = "
            e.strand,
            e.school_year,
            e.created_at as enrolled_date,
-           g.grade_name
+           g.grade_name,
+           (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id) as total_enrollments,
+           (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year < ?) as previous_enrollments,
+           (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year = ?) as current_enrollments
     FROM users u
-    LEFT JOIN enrollments e ON u.id = e.student_id
+    LEFT JOIN enrollments e ON u.id = e.student_id AND e.school_year = ?
     LEFT JOIN grade_levels g ON e.grade_id = g.id
     WHERE u.role = 'Student'
 ";
 
+$params = [$current_sy, $current_sy, $current_sy];
+
+// Add enrollee type filter
+if($enrollee_type == 'new') {
+    // Students who have enrollment but only current school year (first time)
+    $query .= " AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id) = 1";
+    $query .= " AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year = ?) = 1";
+    $params[] = $current_sy;
+} elseif($enrollee_type == 'old') {
+    // Students who have previous enrollments (returning students with at least one enrollment in current year)
+    $query .= " AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year < ?) > 0";
+    $query .= " AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year = ?) = 1";
+    $params[] = $current_sy;
+    $params[] = $current_sy;
+} elseif($enrollee_type == 'not_enrolled') {
+    // Students with no enrollment record at all
+    $query .= " AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id) = 0";
+}
+
 if(!empty($grade_filter)) {
-    $query .= " AND e.grade_id = '$grade_filter'";
+    $query .= " AND e.grade_id = ?";
+    $params[] = $grade_filter;
 }
 
 if(!empty($status_filter)) {
-    $query .= " AND e.status = '$status_filter'";
+    $query .= " AND e.status = ?";
+    $params[] = $status_filter;
 }
 
 if(!empty($search_query)) {
-    $query .= " AND (u.fullname LIKE '%$search_query%' OR u.email LIKE '%$search_query%' OR u.id_number LIKE '%$search_query%')";
+    $query .= " AND (u.fullname LIKE ? OR u.email LIKE ? OR u.id_number LIKE ?)";
+    $search_term = "%$search_query%";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
 }
 
 $query .= " ORDER BY u.created_at DESC";
 
-$students = $conn->query($query);
+$stmt = $conn->prepare($query);
+$stmt->execute($params);
+$students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get statistics
-$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'Student'")->fetch_assoc()['count'];
+$total_students_stmt = $conn->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'Student'");
+$total_students_stmt->execute();
+$total_students = $total_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-$enrolled_students = $conn->query("
+// Get new students (first-time enrollees with current enrollment)
+$new_students_stmt = $conn->prepare("
+    SELECT COUNT(DISTINCT u.id) as count 
+    FROM users u 
+    INNER JOIN enrollments e ON u.id = e.student_id 
+    WHERE u.role = 'Student' 
+    AND e.school_year = ?
+    AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id) = 1
+");
+$new_students_stmt->execute([$current_sy]);
+$new_students = $new_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+// Get old students (have previous enrollments and current enrollment)
+$old_students_stmt = $conn->prepare("
+    SELECT COUNT(DISTINCT u.id) as count 
+    FROM users u 
+    INNER JOIN enrollments e ON u.id = e.student_id 
+    WHERE u.role = 'Student' 
+    AND e.school_year = ?
+    AND (SELECT COUNT(*) FROM enrollments WHERE student_id = u.id AND school_year < ?) > 0
+");
+$old_students_stmt->execute([$current_sy, $current_sy]);
+$old_students = $old_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+// Get not enrolled students (no enrollment records)
+$not_enrolled_stmt = $conn->prepare("
+    SELECT COUNT(*) as count 
+    FROM users u 
+    WHERE u.role = 'Student' 
+    AND NOT EXISTS (SELECT 1 FROM enrollments WHERE student_id = u.id)
+");
+$not_enrolled_stmt->execute();
+$not_enrolled = $not_enrolled_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$enrolled_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
-    WHERE u.role = 'Student' AND e.status = 'Enrolled'
-")->fetch_assoc()['count'];
+    WHERE u.role = 'Student' AND e.status = 'Enrolled' AND e.school_year = ?
+");
+$enrolled_students_stmt->execute([$current_sy]);
+$enrolled_students = $enrolled_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-$pending_students = $conn->query("
+$pending_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
-    WHERE u.role = 'Student' AND e.status = 'Pending'
-")->fetch_assoc()['count'];
+    WHERE u.role = 'Student' AND e.status = 'Pending' AND e.school_year = ?
+");
+$pending_students_stmt->execute([$current_sy]);
+$pending_students = $pending_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
-$rejected_students = $conn->query("
+$rejected_students_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN enrollments e ON u.id = e.student_id 
-    WHERE u.role = 'Student' AND e.status = 'Rejected'
-")->fetch_assoc()['count'];
-
-$no_enrollment = $total_students - ($enrolled_students + $pending_students + $rejected_students);
+    WHERE u.role = 'Student' AND e.status = 'Rejected' AND e.school_year = ?
+");
+$rejected_students_stmt->execute([$current_sy]);
+$rejected_students = $rejected_students_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -129,6 +223,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* Copy all styles from previous students.php but update sidebar avatar styles */
         * {
             margin: 0;
             padding: 0;
@@ -148,6 +243,9 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --new-student: #28a745;
+            --old-student: #17a2b8;
+            --not-enrolled: #6c757d;
         }
 
         body {
@@ -174,23 +272,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             box-shadow: 4px 0 10px rgba(0, 0, 0, 0.1);
         }
 
-        .sidebar h2 {
-            font-size: 24px;
-            margin-bottom: 30px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: #fff;
-            font-weight: 700;
-            letter-spacing: 1px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .sidebar h2 i {
-            color: #FFD700;
-        }
-
         .admin-info {
             text-align: center;
             padding: 20px 0;
@@ -201,16 +282,31 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             margin: 0 auto 15px;
+            border: 3px solid white;
+            overflow: hidden;
+            background: #FFD700;
+        }
+
+        .admin-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .admin-avatar .avatar-initial {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 32px;
             font-weight: bold;
             color: #0B4F2E;
-            border: 3px solid white;
         }
 
         .admin-info h3 {
@@ -299,56 +395,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             font-size: 16px;
         }
 
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
         /* Alert Messages */
         .alert {
             padding: 15px 20px;
@@ -390,7 +436,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         /* Stats Cards */
         .stats-container {
             display: grid;
-            grid-template-columns: repeat(5, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 20px;
             margin-bottom: 30px;
         }
@@ -459,6 +505,53 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         .stat-label {
             color: var(--text-secondary);
             font-size: 12px;
+        }
+
+        /* Tab Navigation */
+        .tab-navigation {
+            background: white;
+            border-radius: 15px;
+            padding: 5px;
+            margin-bottom: 25px;
+            display: flex;
+            gap: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            background: transparent;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            text-decoration: none;
+        }
+
+        .tab-btn i {
+            font-size: 18px;
+        }
+
+        .tab-btn:hover {
+            background: var(--hover-color);
+            color: #0B4F2E;
+        }
+
+        .tab-btn.active {
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            color: white;
+        }
+
+        .tab-btn.active i {
+            color: #FFD700;
         }
 
         /* Actions Bar */
@@ -636,7 +729,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         .student-avatar {
             width: 45px;
             height: 45px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             border-radius: 12px;
             display: flex;
             align-items: center;
@@ -644,6 +736,18 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             color: white;
             font-size: 18px;
             font-weight: 600;
+        }
+
+        .student-avatar.new {
+            background: linear-gradient(135deg, #28a745, #20c997);
+        }
+
+        .student-avatar.old {
+            background: linear-gradient(135deg, #17a2b8, #0d6efd);
+        }
+
+        .student-avatar.not-enrolled {
+            background: linear-gradient(135deg, #6c757d, #495057);
         }
 
         .student-details h4 {
@@ -690,6 +794,24 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         .badge-none {
             background: rgba(108, 117, 125, 0.1);
             color: #6c757d;
+        }
+
+        .badge-new {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid #28a745;
+        }
+
+        .badge-old {
+            background: rgba(23, 162, 184, 0.1);
+            color: #17a2b8;
+            border: 1px solid #17a2b8;
+        }
+
+        .badge-not-enrolled {
+            background: rgba(108, 117, 125, 0.1);
+            color: #6c757d;
+            border: 1px solid #6c757d;
         }
 
         .grade-tag {
@@ -745,10 +867,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             color: #007bff;
         }
 
-        .btn-enroll:hover {
-            color: #28a745;
-        }
-
         .btn-delete:hover {
             color: #dc3545;
         }
@@ -770,36 +888,10 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             margin-bottom: 10px;
         }
 
-        /* Pagination */
-        .pagination {
-            margin-top: 25px;
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-        }
-
-        .page-btn {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            border: 1px solid var(--border-color);
-            background: white;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .page-btn:hover,
-        .page-btn.active {
-            background: #0B4F2E;
-            color: white;
-            border-color: #0B4F2E;
-        }
-
         /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(2, 1fr);
             }
         }
 
@@ -809,7 +901,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                 padding: 20px 10px;
             }
             
-            .sidebar h2 span,
             .admin-info h3,
             .admin-info p,
             .menu-section h3,
@@ -820,7 +911,6 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             .admin-avatar {
                 width: 50px;
                 height: 50px;
-                font-size: 20px;
             }
             
             .menu-items a {
@@ -839,14 +929,12 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
+            }
+            
+            .tab-navigation {
+                flex-direction: column;
             }
             
             .actions-bar {
@@ -886,15 +974,16 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
 <body>
     <div class="app-container">
         <!-- Sidebar -->
-        <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
+        <div class="sidebar">            
             <div class="admin-info">
                 <div class="admin-avatar">
-                    <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                    <?php if($profile_picture && file_exists("../" . $profile_picture)): ?>
+                        <img src="../<?php echo $profile_picture; ?>" alt="Profile Picture">
+                    <?php else: ?>
+                        <div class="avatar-initial">
+                            <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <h3><?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?></h3>
                 <p><i class="fas fa-user-shield"></i> Administrator</p>
@@ -967,60 +1056,66 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Enrolled</h3>
+                        <h3>New Enrollees</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-check-circle"></i>
+                            <i class="fas fa-star-of-life"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $enrolled_students; ?></div>
-                    <div class="stat-label">Active enrollments</div>
+                    <div class="stat-number"><?php echo $new_students; ?></div>
+                    <div class="stat-label">First-time enrollees</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Pending</h3>
+                        <h3>Old Enrollees</h3>
                         <div class="stat-icon">
-                            <i class="fas fa-clock"></i>
+                            <i class="fas fa-history"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $pending_students; ?></div>
-                    <div class="stat-label">Awaiting approval</div>
+                    <div class="stat-number"><?php echo $old_students; ?></div>
+                    <div class="stat-label">Returning students</div>
                 </div>
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Rejected</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-times-circle"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $rejected_students; ?></div>
-                    <div class="stat-label">Not enrolled</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-                        <h3>No Enrollment</h3>
+                        <h3>Not Enrolled</h3>
                         <div class="stat-icon">
                             <i class="fas fa-user-slash"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $no_enrollment; ?></div>
-                    <div class="stat-label">No records</div>
+                    <div class="stat-number"><?php echo $not_enrolled; ?></div>
+                    <div class="stat-label">No enrollment record</div>
                 </div>
+            </div>
+
+            <!-- Tab Navigation -->
+            <div class="tab-navigation">
+                <a href="?type=all" class="tab-btn <?php echo $enrollee_type == 'all' ? 'active' : ''; ?>">
+                    <i class="fas fa-users"></i> All Students
+                </a>
+                <a href="?type=new" class="tab-btn <?php echo $enrollee_type == 'new' ? 'active' : ''; ?>">
+                    <i class="fas fa-star-of-life"></i> New Enrollees
+                </a>
+                <a href="?type=old" class="tab-btn <?php echo $enrollee_type == 'old' ? 'active' : ''; ?>">
+                    <i class="fas fa-history"></i> Old Enrollees
+                </a>
+                <a href="?type=not_enrolled" class="tab-btn <?php echo $enrollee_type == 'not_enrolled' ? 'active' : ''; ?>">
+                    <i class="fas fa-user-slash"></i> Not Enrolled
+                </a>
             </div>
 
             <!-- Actions Bar -->
             <div class="actions-bar">
                 <form method="GET" action="" style="display: flex; gap: 15px; flex-wrap: wrap; width: 100%;">
+                    <input type="hidden" name="type" value="<?php echo $enrollee_type; ?>">
                     <div class="filter-group">
                         <select name="grade" class="filter-select">
                             <option value="">All Grades</option>
-                            <?php while($grade = $grade_levels->fetch_assoc()): ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
                                     <?php echo $grade['grade_name']; ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
 
                         <select name="status" class="filter-select">
@@ -1034,7 +1129,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                             <i class="fas fa-filter"></i> Apply Filters
                         </button>
 
-                        <a href="students.php" class="btn-reset">
+                        <a href="students.php?type=<?php echo $enrollee_type; ?>" class="btn-reset">
                             <i class="fas fa-redo-alt"></i> Reset
                         </a>
                     </div>
@@ -1053,8 +1148,16 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             <!-- Students Table -->
             <div class="table-card">
                 <div class="table-header">
-                    <h3><i class="fas fa-user-graduate"></i> Student List</h3>
-                    <span class="badge badge-enrolled">Total: <?php echo $students ? $students->num_rows : 0; ?> students</span>
+                    <h3>
+                        <i class="fas fa-user-graduate"></i> 
+                        <?php 
+                        if($enrollee_type == 'new') echo 'New Enrollees List';
+                        elseif($enrollee_type == 'old') echo 'Old Enrollees List';
+                        elseif($enrollee_type == 'not_enrolled') echo 'Not Enrolled Students List';
+                        else echo 'Student List';
+                        ?>
+                    </h3>
+                    <span class="badge badge-enrolled">Total: <?php echo count($students); ?> students</span>
                 </div>
 
                 <div class="table-container">
@@ -1063,6 +1166,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                             <tr>
                                 <th>Student</th>
                                 <th>ID Number</th>
+                                <th>Type</th>
                                 <th>Grade & Strand</th>
                                 <th>Status</th>
                                 <th>Enrolled Date</th>
@@ -1070,12 +1174,31 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($students && $students->num_rows > 0): ?>
-                                <?php while($student = $students->fetch_assoc()): ?>
+                            <?php if(count($students) > 0): ?>
+                                <?php foreach($students as $student): 
+                                    // Determine student type
+                                    if($student['total_enrollments'] == 0) {
+                                        $student_type = 'not_enrolled';
+                                        $student_type_label = 'Not Enrolled';
+                                        $student_type_icon = 'user-slash';
+                                    } elseif($student['total_enrollments'] == 1 && $student['current_enrollments'] == 1) {
+                                        $student_type = 'new';
+                                        $student_type_label = 'New Enrollee';
+                                        $student_type_icon = 'star-of-life';
+                                    } elseif($student['previous_enrollments'] > 0 && $student['current_enrollments'] == 1) {
+                                        $student_type = 'old';
+                                        $student_type_label = 'Old Enrollee';
+                                        $student_type_icon = 'history';
+                                    } else {
+                                        $student_type = 'not_enrolled';
+                                        $student_type_label = 'Not Enrolled';
+                                        $student_type_icon = 'user-slash';
+                                    }
+                                ?>
                                     <tr>
                                         <td>
                                             <div class="student-info">
-                                                <div class="student-avatar">
+                                                <div class="student-avatar <?php echo $student_type; ?>">
                                                     <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
                                                 </div>
                                                 <div class="student-details">
@@ -1088,9 +1211,15 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                             <span class="grade-tag"><?php echo $student['id_number'] ?? 'N/A'; ?></span>
                                         </td>
                                         <td>
-                                            <?php if($student['grade_name']): ?>
+                                            <span class="badge badge-<?php echo $student_type; ?>">
+                                                <i class="fas fa-<?php echo $student_type_icon; ?>"></i>
+                                                <?php echo $student_type_label; ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <?php if(!empty($student['grade_name'])): ?>
                                                 <span class="grade-tag"><?php echo htmlspecialchars($student['grade_name']); ?></span>
-                                                <?php if($student['strand']): ?>
+                                                <?php if(!empty($student['strand'])): ?>
                                                     <span class="strand-tag"><?php echo htmlspecialchars($student['strand']); ?></span>
                                                 <?php endif; ?>
                                             <?php else: ?>
@@ -1098,7 +1227,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <?php if($student['enrollment_status']): ?>
+                                            <?php if(!empty($student['enrollment_status'])): ?>
                                                 <span class="badge badge-<?php echo strtolower($student['enrollment_status']); ?>">
                                                     <?php echo $student['enrollment_status']; ?>
                                                 </span>
@@ -1107,7 +1236,7 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                             <?php endif; ?>
                                         </td>
                                         <td>
-                                            <?php if($student['enrolled_date']): ?>
+                                            <?php if(!empty($student['enrolled_date'])): ?>
                                                 <span class="activity-time">
                                                     <i class="far fa-calendar"></i>
                                                     <?php echo date('M d, Y', strtotime($student['enrolled_date'])); ?>
@@ -1124,41 +1253,39 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                                 <a href="edit_student.php?id=<?php echo $student['id']; ?>" class="btn-icon btn-edit" title="Edit">
                                                     <i class="fas fa-edit"></i>
                                                 </a>
-                                                <?php if(!$student['enrollment_status']): ?>
-                                                    <a href="enroll_student.php?id=<?php echo $student['id']; ?>" class="btn-icon btn-enroll" title="Enroll">
-                                                        <i class="fas fa-user-plus"></i>
-                                                    </a>
-                                                <?php endif; ?>
-                                                <a href="?delete=<?php echo $student['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                                <a href="?delete=<?php echo $student['id']; ?>&type=<?php echo $enrollee_type; ?>" class="btn-icon btn-delete" title="Delete" 
                                                    onclick="return confirm('Are you sure you want to delete this student? This will also delete all associated records.')">
                                                     <i class="fas fa-trash"></i>
                                                 </a>
                                             </div>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="6">
+                                    <td colspan="7">
                                         <div class="no-data">
                                             <i class="fas fa-user-graduate"></i>
                                             <h3>No Students Found</h3>
-                                            <p>Click the "Add New Student" button to add your first student.</p>
+                                            <p>
+                                                <?php 
+                                                if($enrollee_type == 'new') {
+                                                    echo 'No new enrollees found for this school year.';
+                                                } elseif($enrollee_type == 'old') {
+                                                    echo 'No returning students found.';
+                                                } elseif($enrollee_type == 'not_enrolled') {
+                                                    echo 'No students without enrollment records found.';
+                                                } else {
+                                                    echo 'Click the "Add New Student" button to add your first student.';
+                                                }
+                                                ?>
+                                            </p>
                                         </div>
                                     </td>
                                 </tr>
                             <?php endif; ?>
                         </tbody>
                     </table>
-                </div>
-
-                <!-- Pagination -->
-                <div class="pagination">
-                    <button class="page-btn active">1</button>
-                    <button class="page-btn">2</button>
-                    <button class="page-btn">3</button>
-                    <button class="page-btn">4</button>
-                    <button class="page-btn">5</button>
                 </div>
             </div>
         </div>
@@ -1184,11 +1311,14 @@ $grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
         });
 
         // Search on Enter key
-        document.querySelector('.search-box input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                this.form.submit();
-            }
-        });
+        const searchInput = document.querySelector('.search-box input');
+        if(searchInput) {
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    this.form.submit();
+                }
+            });
+        }
     </script>
 </body>
 </html>

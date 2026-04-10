@@ -18,20 +18,16 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $student_id = $_GET['id'];
 
-// Get student details
+// Get student details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$student_id]);
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$student) {
     header("Location: students.php");
     exit();
 }
-
-$student = $result->fetch_assoc();
-$stmt->close();
 
 // Get student's current enrollment
 $enrollment_query = "
@@ -42,10 +38,8 @@ $enrollment_query = "
     ORDER BY e.id DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$stmt->execute([$student_id]);
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // Handle form submission
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -70,27 +64,21 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Check if email already exists (excluding current student)
         if(empty($errors)) {
             $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $student_id);
-            $check_email->execute();
-            $check_email->store_result();
+            $check_email->execute([$email, $student_id]);
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
         }
         
         // Check if ID number already exists (if provided and excluding current student)
         if(empty($errors) && $id_number) {
             $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $student_id);
-            $check_id->execute();
-            $check_id->store_result();
+            $check_id->execute([$id_number, $student_id]);
             
-            if($check_id->num_rows > 0) {
+            if($check_id->rowCount() > 0) {
                 $errors[] = "ID number already exists for another user";
             }
-            $check_id->close();
         }
         
         // If no errors, update the student
@@ -98,21 +86,20 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             if($id_number) {
                 $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
                 $update_stmt = $conn->prepare($update_query);
-                $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $student_id);
+                $update_stmt->execute([$fullname, $email, $id_number, $student_id]);
             } else {
                 $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = NULL WHERE id = ?";
                 $update_stmt = $conn->prepare($update_query);
-                $update_stmt->bind_param("ssi", $fullname, $email, $student_id);
+                $update_stmt->execute([$fullname, $email, $student_id]);
             }
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) { // rowCount returns 0 if no changes, which is still success
                 $_SESSION['success_message'] = "Student information updated successfully!";
                 header("Location: view_student.php?id=" . $student_id);
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -142,16 +129,15 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
             $update_query = "UPDATE users SET password = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $student_id);
+            $update_stmt->execute([$hashed_password, $student_id]);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) {
                 $_SESSION['success_message'] = "Password reset successfully!";
                 header("Location: view_student.php?id=" . $student_id);
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         if(!empty($errors)) {

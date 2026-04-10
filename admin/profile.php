@@ -28,11 +28,83 @@ if(isset($_SESSION['error_message'])) {
 // Get admin details
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Admin'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $admin_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$admin = $result->fetch_assoc();
-$stmt->close();
+$stmt->execute([$admin_id]);
+$admin = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt = null;
+
+// Check if profile_picture column exists, if not, add it
+try {
+    $check_column = $conn->query("SHOW COLUMNS FROM users LIKE 'profile_picture'");
+    if($check_column->rowCount() == 0) {
+        $conn->exec("ALTER TABLE users ADD COLUMN profile_picture varchar(255) DEFAULT NULL");
+    }
+} catch(PDOException $e) {
+    // Column might already exist or other error
+}
+
+// Handle profile picture upload
+if(isset($_POST['upload_profile_pic'])) {
+    if(isset($_FILES['profile_picture']) && $_FILES['profile_picture']['error'] == 0) {
+        $allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+        $filename = $_FILES['profile_picture']['name'];
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        
+        if(in_array($ext, $allowed)) {
+            // Create uploads directory if not exists
+            $upload_dir = "../uploads/profile_pictures/";
+            if(!is_dir($upload_dir)) {
+                mkdir($upload_dir, 0777, true);
+            }
+            
+            // Generate unique filename
+            $new_filename = "admin_" . $admin_id . "_" . time() . "." . $ext;
+            $upload_path = $upload_dir . $new_filename;
+            $db_path = "uploads/profile_pictures/" . $new_filename;
+            
+            // Delete old profile picture if exists
+            if(!empty($admin['profile_picture']) && file_exists("../" . $admin['profile_picture'])) {
+                unlink("../" . $admin['profile_picture']);
+            }
+            
+            // Upload new file
+            if(move_uploaded_file($_FILES['profile_picture']['tmp_name'], $upload_path)) {
+                $update_stmt = $conn->prepare("UPDATE users SET profile_picture = ? WHERE id = ?");
+                if($update_stmt->execute([$db_path, $admin_id])) {
+                    // Update session with profile picture path
+                    $_SESSION['user']['profile_picture'] = $db_path;
+                    $_SESSION['success_message'] = "Profile picture updated successfully!";
+                    header("Location: profile.php");
+                    exit();
+                } else {
+                    $error_message = "Failed to update database.";
+                }
+            } else {
+                $error_message = "Failed to upload image.";
+            }
+        } else {
+            $error_message = "Invalid file type. Allowed: JPG, JPEG, PNG, GIF, WEBP";
+        }
+    } else {
+        $error_message = "Please select an image file.";
+    }
+}
+
+// Handle remove profile picture
+if(isset($_GET['remove_pic'])) {
+    if(!empty($admin['profile_picture']) && file_exists("../" . $admin['profile_picture'])) {
+        unlink("../" . $admin['profile_picture']);
+    }
+    $update_stmt = $conn->prepare("UPDATE users SET profile_picture = NULL WHERE id = ?");
+    if($update_stmt->execute([$admin_id])) {
+        // Update session
+        $_SESSION['user']['profile_picture'] = null;
+        $_SESSION['success_message'] = "Profile picture removed successfully!";
+        header("Location: profile.php");
+        exit();
+    } else {
+        $error_message = "Failed to remove profile picture.";
+    }
+}
 
 // Handle 2FA toggle
 if(isset($_POST['toggle_2fa'])) {
@@ -68,8 +140,8 @@ if(isset($_SESSION['2fa_verified']) && $_SESSION['2fa_verified'] === true) {
         unset($_SESSION['2fa_verified_time']);
         
         // Refresh admin data
-        $result = $conn->query("SELECT * FROM users WHERE id = $admin_id");
-        $admin = $result->fetch_assoc();
+        $stmt = $conn->query("SELECT * FROM users WHERE id = $admin_id");
+        $admin = $stmt->fetch(PDO::FETCH_ASSOC);
     } else {
         unset($_SESSION['2fa_verified']);
         unset($_SESSION['2fa_verified_time']);
@@ -99,36 +171,31 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Check if email already exists (excluding current admin)
         if(empty($errors)) {
             $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $admin_id);
-            $check_email->execute();
-            $check_email->store_result();
+            $check_email->execute([$email, $admin_id]);
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
+            $check_email = null;
         }
         
         // Check if ID number already exists (if provided and excluding current admin)
         if(empty($errors) && $id_number) {
             $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $admin_id);
-            $check_id->execute();
-            $check_id->store_result();
+            $check_id->execute([$id_number, $admin_id]);
             
-            if($check_id->num_rows > 0) {
+            if($check_id->rowCount() > 0) {
                 $errors[] = "ID number already exists for another user";
             }
-            $check_id->close();
+            $check_id = null;
         }
         
         // If no errors, update the profile
         if(empty($errors)) {
             $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $admin_id);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->execute([$fullname, $email, $id_number, $admin_id])) {
                 // Update session
                 $_SESSION['user']['fullname'] = $fullname;
                 $_SESSION['user']['email'] = $email;
@@ -138,9 +205,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 header("Location: profile.php");
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
+            $update_stmt = null;
         }
         
         // If there are errors, store them
@@ -192,16 +259,15 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
                 $update_query = "UPDATE users SET password = ? WHERE id = ?";
                 $update_stmt = $conn->prepare($update_query);
-                $update_stmt->bind_param("si", $hashed_password, $admin_id);
                 
-                if($update_stmt->execute()) {
+                if($update_stmt->execute([$hashed_password, $admin_id])) {
                     $_SESSION['success_message'] = "Password changed successfully!";
                     header("Location: profile.php");
                     exit();
                 } else {
-                    $errors[] = "Database error: " . $conn->error;
+                    $errors[] = "Database error: " . $conn->errorInfo()[2];
                 }
-                $update_stmt->close();
+                $update_stmt = null;
             }
         }
         
@@ -215,6 +281,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 $account_created = $admin['created_at'];
 $two_factor_enabled = $admin['two_factor_enabled'] ?? 0;
 $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
+$profile_picture = $admin['profile_picture'] ?? null;
+
+// Get profile picture for sidebar
+$sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
 ?>
 
 <!DOCTYPE html>
@@ -300,16 +370,31 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: var(--accent);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             margin: 0 auto 15px;
+            border: 3px solid white;
+            overflow: hidden;
+        }
+
+        .admin-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .admin-avatar .avatar-initial {
+            width: 100%;
+            height: 100%;
+            background: var(--accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 32px;
             font-weight: bold;
             color: var(--primary);
-            border: 3px solid white;
         }
 
         .admin-info h3 {
@@ -503,18 +588,57 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
         }
 
         .profile-avatar-large {
-            width: 120px;
-            height: 120px;
+            width: 150px;
+            height: 150px;
+            margin: 0 auto 20px;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .profile-avatar-large img {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid var(--accent);
+            box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
+        }
+
+        .avatar-overlay {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            background: var(--primary);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 2px solid white;
+        }
+
+        .avatar-overlay:hover {
+            background: var(--primary-dark);
+            transform: scale(1.1);
+        }
+
+        .avatar-initial {
+            width: 150px;
+            height: 150px;
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 20px;
-            font-size: 48px;
+            font-size: 56px;
             font-weight: bold;
             color: white;
             border: 4px solid var(--accent);
+            margin: 0 auto;
         }
 
         .profile-name {
@@ -600,6 +724,177 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
             font-size: 15px;
             font-weight: 500;
             color: var(--text-primary);
+        }
+
+        /* Image Upload Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 20px;
+            width: 90%;
+            max-width: 450px;
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            padding: 20px 25px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-primary);
+        }
+
+        .modal-header h3 i {
+            color: var(--primary);
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+
+        .close-modal:hover {
+            color: var(--danger);
+        }
+
+        .modal-body {
+            padding: 25px;
+            text-align: center;
+        }
+
+        .image-preview {
+            width: 150px;
+            height: 150px;
+            margin: 0 auto 20px;
+            border-radius: 50%;
+            overflow: hidden;
+            border: 3px solid var(--primary);
+        }
+
+        .image-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            margin: 20px 0;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            opacity: 0;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
+        }
+
+        .file-input-label {
+            display: block;
+            padding: 12px 20px;
+            background: var(--primary-light);
+            color: var(--primary);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .file-input-label:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        .modal-footer {
+            padding: 20px 25px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: #e9ecef;
+            color: var(--text-secondary);
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-secondary:hover {
+            background: #dee2e6;
+        }
+
+        .btn-danger {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--danger);
+            border: 1px solid var(--danger);
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-danger:hover {
+            background: var(--danger);
+            color: white;
         }
 
         /* 2FA Section */
@@ -900,17 +1195,6 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
                 display: none;
             }
             
-            .admin-avatar {
-                width: 50px;
-                height: 50px;
-                font-size: 20px;
-            }
-            
-            .menu-items a {
-                justify-content: center;
-                padding: 15px;
-            }
-            
             .main-content {
                 margin-left: 80px;
                 padding: 20px;
@@ -947,14 +1231,15 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
             <div class="admin-info">
                 <div class="admin-avatar">
-                    <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                    <?php if($sidebar_profile_pic && file_exists("../" . $sidebar_profile_pic)): ?>
+                        <img src="../<?php echo $sidebar_profile_pic; ?>" alt="Profile Picture">
+                    <?php else: ?>
+                        <div class="avatar-initial">
+                            <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <h3><?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?></h3>
                 <p><i class="fas fa-user-shield"></i> Administrator</p>
@@ -1017,8 +1302,17 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
                 <!-- Left Column - Profile Info -->
                 <div>
                     <div class="profile-card">
-                        <div class="profile-avatar-large">
-                            <?php echo strtoupper(substr($admin['fullname'], 0, 1)); ?>
+                        <div class="profile-avatar-large" onclick="openImageModal()">
+                            <?php if($profile_picture && file_exists("../" . $profile_picture)): ?>
+                                <img src="../<?php echo $profile_picture; ?>" alt="Profile Picture">
+                            <?php else: ?>
+                                <div class="avatar-initial">
+                                    <?php echo strtoupper(substr($admin['fullname'], 0, 1)); ?>
+                                </div>
+                            <?php endif; ?>
+                            <div class="avatar-overlay">
+                                <i class="fas fa-camera"></i>
+                            </div>
                         </div>
                         <h2 class="profile-name"><?php echo htmlspecialchars($admin['fullname']); ?></h2>
                         <span class="profile-role">Administrator</span>
@@ -1207,7 +1501,73 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
         </div>
     </div>
 
+    <!-- Image Upload Modal -->
+    <div class="modal" id="imageModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-camera"></i> Update Profile Picture</h3>
+                <button class="close-modal" onclick="closeImageModal()">&times;</button>
+            </div>
+            <form method="POST" enctype="multipart/form-data" id="uploadForm">
+                <div class="modal-body">
+                    <div class="image-preview" id="imagePreview">
+                        <?php if($profile_picture && file_exists("../" . $profile_picture)): ?>
+                            <img src="../<?php echo $profile_picture; ?>" alt="Profile Preview" id="previewImg">
+                        <?php else: ?>
+                            <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230B4F2E'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E" alt="Profile Preview" id="previewImg" style="width: 100%; height: 100%; object-fit: cover;">
+                        <?php endif; ?>
+                    </div>
+                    <div class="file-input-wrapper">
+                        <input type="file" name="profile_picture" id="profile_picture" accept="image/jpeg,image/png,image/gif,image/webp" onchange="previewImage(this)">
+                        <label for="profile_picture" class="file-input-label">
+                            <i class="fas fa-upload"></i> Choose Image
+                        </label>
+                    </div>
+                    <p style="font-size: 12px; color: var(--text-secondary); margin-top: 10px;">
+                        <i class="fas fa-info-circle"></i> Allowed formats: JPG, PNG, GIF, WEBP. Max size: 5MB
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <?php if($profile_picture): ?>
+                        <a href="?remove_pic=1" class="btn-danger" style="text-decoration: none;" onclick="return confirm('Remove your profile picture?')">
+                            <i class="fas fa-trash"></i> Remove
+                        </a>
+                    <?php endif; ?>
+                    <button type="button" class="btn-secondary" onclick="closeImageModal()">Cancel</button>
+                    <button type="submit" name="upload_profile_pic" class="btn-primary">Upload</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        // Image modal functions
+        function openImageModal() {
+            document.getElementById('imageModal').classList.add('active');
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').classList.remove('active');
+        }
+
+        function previewImage(input) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('previewImg').src = e.target.result;
+                }
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('imageModal');
+            if (event.target === modal) {
+                closeImageModal();
+            }
+        }
+
         // Toggle password fields
         const changePasswordCheckbox = document.getElementById('change_password_checkbox');
         const passwordFields = document.getElementById('passwordFields');
@@ -1216,34 +1576,38 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
         const confirmPassword = document.getElementById('confirm_password');
         const changePasswordBtn = document.getElementById('changePasswordBtn');
 
-        changePasswordCheckbox.addEventListener('change', function() {
-            if (this.checked) {
-                passwordFields.classList.add('show');
-                currentPassword.disabled = false;
-                newPassword.disabled = false;
-                confirmPassword.disabled = false;
-                changePasswordBtn.disabled = false;
-                newPassword.focus();
-            } else {
-                passwordFields.classList.remove('show');
-                currentPassword.disabled = true;
-                newPassword.disabled = true;
-                confirmPassword.disabled = true;
-                changePasswordBtn.disabled = true;
-                currentPassword.value = '';
-                newPassword.value = '';
-                confirmPassword.value = '';
-                resetPasswordStrength();
-            }
-        });
+        if(changePasswordCheckbox) {
+            changePasswordCheckbox.addEventListener('change', function() {
+                if (this.checked) {
+                    passwordFields.classList.add('show');
+                    currentPassword.disabled = false;
+                    newPassword.disabled = false;
+                    confirmPassword.disabled = false;
+                    changePasswordBtn.disabled = false;
+                    newPassword.focus();
+                } else {
+                    passwordFields.classList.remove('show');
+                    currentPassword.disabled = true;
+                    newPassword.disabled = true;
+                    confirmPassword.disabled = true;
+                    changePasswordBtn.disabled = true;
+                    currentPassword.value = '';
+                    newPassword.value = '';
+                    confirmPassword.value = '';
+                    resetPasswordStrength();
+                }
+            });
+        }
 
         // Password strength checker
         function resetPasswordStrength() {
-            document.getElementById('passwordStrength').style.width = '0';
-            document.getElementById('passwordStrengthText').innerHTML = 
-                '<i class="fas fa-info-circle"></i> <span>Minimum 6 characters</span>';
-            document.getElementById('passwordMatch').innerHTML = 
-                '<i class="fas fa-info-circle"></i> <span>Re-enter new password</span>';
+            const strengthBar = document.getElementById('passwordStrength');
+            const strengthText = document.getElementById('passwordStrengthText');
+            const passwordMatch = document.getElementById('passwordMatch');
+            
+            if(strengthBar) strengthBar.style.width = '0';
+            if(strengthText) strengthText.innerHTML = '<i class="fas fa-info-circle"></i> <span>Minimum 6 characters</span>';
+            if(passwordMatch) passwordMatch.innerHTML = '<i class="fas fa-info-circle"></i> <span>Re-enter new password</span>';
         }
 
         function checkPasswordStrength() {
@@ -1308,31 +1672,39 @@ $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
             }
         }
 
-        newPassword.addEventListener('input', checkPasswordStrength);
-        newPassword.addEventListener('input', checkPasswordMatch);
-        confirmPassword.addEventListener('input', checkPasswordMatch);
+        if(newPassword) {
+            newPassword.addEventListener('input', checkPasswordStrength);
+            newPassword.addEventListener('input', checkPasswordMatch);
+        }
+        
+        if(confirmPassword) {
+            confirmPassword.addEventListener('input', checkPasswordMatch);
+        }
 
         // Form validation for password change
-        document.getElementById('passwordForm').addEventListener('submit', function(e) {
-            if (changePasswordCheckbox.checked) {
-                const current = currentPassword.value;
-                const password = newPassword.value;
-                const confirm = confirmPassword.value;
+        const passwordForm = document.getElementById('passwordForm');
+        if(passwordForm) {
+            passwordForm.addEventListener('submit', function(e) {
+                if (changePasswordCheckbox && changePasswordCheckbox.checked) {
+                    const current = currentPassword.value;
+                    const password = newPassword.value;
+                    const confirm = confirmPassword.value;
 
-                if (!current) {
+                    if (!current) {
+                        e.preventDefault();
+                        alert('Please enter your current password');
+                    } else if (password.length < 6) {
+                        e.preventDefault();
+                        alert('New password must be at least 6 characters long');
+                    } else if (password !== confirm) {
+                        e.preventDefault();
+                        alert('New passwords do not match');
+                    }
+                } else if(changePasswordCheckbox) {
                     e.preventDefault();
-                    alert('Please enter your current password');
-                } else if (password.length < 6) {
-                    e.preventDefault();
-                    alert('New password must be at least 6 characters long');
-                } else if (password !== confirm) {
-                    e.preventDefault();
-                    alert('New passwords do not match');
                 }
-            } else {
-                e.preventDefault();
-            }
-        });
+            });
+        }
 
         // Auto-hide alerts after 5 seconds
         setTimeout(function() {

@@ -47,48 +47,41 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         $errors[] = "Role is required";
     }
     
-    // Check if email already exists
+    // Check if email already exists using PDO
     if(empty($errors)) {
         $check = $conn->prepare("SELECT id FROM users WHERE email = ?");
-        $check->bind_param("s", $email);
-        $check->execute();
-        $check->store_result();
+        $check->execute([$email]);
         
-        if($check->num_rows > 0) {
+        if($check->rowCount() > 0) {
             $errors[] = "Email already exists";
         }
-        $check->close();
     }
     
     // Check if ID number exists (if provided)
     if(empty($errors) && $id_number) {
         $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ?");
-        $check_id->bind_param("s", $id_number);
-        $check_id->execute();
-        $check_id->store_result();
+        $check_id->execute([$id_number]);
         
-        if($check_id->num_rows > 0) {
+        if($check_id->rowCount() > 0) {
             $errors[] = "ID number already exists";
         }
-        $check_id->close();
     }
     
     // If no errors, insert the user
     if(empty($errors)) {
-        // Hash password and insert
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-        
-        $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role) VALUES (?, ?, ?, ?, ?)");
-        $stmt->bind_param("sssss", $id_number, $fullname, $email, $hashed_password, $role);
-        
-        if($stmt->execute()) {
+        try {
+            // Hash password
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+            
+            $stmt = $conn->prepare("INSERT INTO users (id_number, fullname, email, password, role, is_approved) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute([$id_number, $fullname, $email, $hashed_password, $role, 1]);
+            
             $_SESSION['success_message'] = "Account created successfully!";
             header("Location: manage_accounts.php");
             exit();
-        } else {
-            $errors[] = "Error creating account: " . $conn->error;
+        } catch(PDOException $e) {
+            $errors[] = "Error creating account: " . $e->getMessage();
         }
-        $stmt->close();
     }
     
     // If there are errors, store them
@@ -116,18 +109,17 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --danger: #dc3545;
+            --warning: #ffc107;
         }
 
         body {
@@ -272,6 +264,13 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             color: var(--text-primary);
             margin-bottom: 10px;
             font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .dashboard-header h1 i {
+            color: var(--primary);
         }
 
         .dashboard-header p {
@@ -354,69 +353,64 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
             font-size: 20px;
         }
 
-        .error-list {
-            list-style: none;
-            margin-top: 10px;
-        }
-
-        .error-list li {
-            color: #dc3545;
-            font-size: 14px;
-            margin-bottom: 5px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .error-list li i {
-            font-size: 14px;
+        /* Form Container */
+        .form-container {
+            max-width: 900px;
+            margin: 0 auto;
         }
 
         /* Form Card */
         .form-card {
             background: white;
-            border-radius: 20px;
+            border-radius: 30px;
             padding: 40px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-            max-width: 700px;
-            margin: 0 auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+            transition: transform 0.3s ease;
+        }
+
+        .form-card:hover {
+            transform: translateY(-5px);
         }
 
         .form-card h3 {
             color: var(--text-primary);
-            font-size: 20px;
+            font-size: 24px;
             font-weight: 600;
             margin-bottom: 30px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             padding-bottom: 20px;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 2px solid var(--border-color);
         }
 
         .form-card h3 i {
-            color: #0B4F2E;
+            color: var(--primary);
+            font-size: 28px;
         }
 
+        /* Form Row */
         .form-row {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 25px;
+            margin-bottom: 5px;
         }
 
+        /* Form Groups */
         .form-group {
             margin-bottom: 25px;
         }
@@ -425,12 +419,14 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             display: block;
             margin-bottom: 8px;
             color: var(--text-primary);
-            font-weight: 500;
+            font-weight: 600;
             font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
 
         .form-group label span {
-            color: #dc3545;
+            color: var(--danger);
             margin-left: 3px;
         }
 
@@ -439,23 +435,19 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             width: 100%;
             padding: 14px 18px;
             border: 2px solid var(--border-color);
-            border-radius: 12px;
+            border-radius: 14px;
             font-size: 15px;
             transition: all 0.3s;
             background: #f8f9fa;
+            font-family: inherit;
         }
 
         .form-group input:focus,
         .form-group select:focus {
-            border-color: #0B4F2E;
+            border-color: var(--primary);
             background: white;
             outline: none;
             box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
-        }
-
-        .form-group input.error {
-            border-color: #dc3545;
-            background: #fff8f8;
         }
 
         .form-group input::placeholder {
@@ -464,21 +456,22 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         .form-hint {
-            margin-top: 6px;
+            margin-top: 8px;
             font-size: 12px;
             color: var(--text-secondary);
             display: flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
         }
 
         .form-hint i {
-            color: #0B4F2E;
-            font-size: 13px;
+            color: var(--primary);
+            font-size: 12px;
         }
 
+        /* Password Strength */
         .password-strength {
-            margin-top: 8px;
+            margin-top: 10px;
             height: 4px;
             background: #e9ecef;
             border-radius: 2px;
@@ -491,110 +484,119 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             transition: width 0.3s, background-color 0.3s;
         }
 
-        .password-strength-text {
-            font-size: 12px;
-            margin-top: 5px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
         .strength-weak {
-            color: #dc3545;
+            color: var(--danger);
         }
 
         .strength-medium {
-            color: #ffc107;
+            color: var(--warning);
         }
 
         .strength-strong {
-            color: #28a745;
+            color: var(--success);
         }
 
-        /* Role Badge Preview */
-        .role-preview {
-            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-            border-radius: 15px;
-            padding: 20px;
-            margin: 25px 0;
+        /* Role Preview */
+        .preview-card {
+            background: linear-gradient(135deg, #f8f9fa, #ffffff);
+            border-radius: 20px;
+            padding: 25px;
+            margin: 30px 0 25px;
+            border: 1px solid var(--border-color);
         }
 
-        .role-preview h4 {
+        .preview-card h4 {
             color: var(--text-primary);
             font-size: 16px;
             font-weight: 600;
-            margin-bottom: 15px;
+            margin-bottom: 20px;
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .role-preview h4 i {
-            color: #0B4F2E;
+        .preview-card h4 i {
+            color: var(--primary);
         }
 
-        .preview-item {
+        .preview-content {
             display: flex;
             align-items: center;
             gap: 20px;
             padding: 20px;
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            border-radius: 16px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
 
         .preview-avatar {
-            width: 60px;
-            height: 60px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 15px;
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 18px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 28px;
-            font-weight: 600;
+            font-size: 32px;
+            font-weight: 700;
+            box-shadow: 0 5px 15px rgba(11, 79, 46, 0.2);
         }
 
-        .preview-details {
+        .preview-info {
             flex: 1;
         }
 
-        .preview-details h5 {
+        .preview-info h5 {
             color: var(--text-primary);
             font-size: 18px;
-            margin-bottom: 5px;
+            font-weight: 600;
+            margin-bottom: 8px;
         }
 
-        .preview-details .preview-role {
+        .preview-role-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
+            padding: 6px 16px;
+            border-radius: 25px;
             font-size: 12px;
             font-weight: 600;
             margin-top: 5px;
         }
 
-        .preview-role.admin {
+        .preview-role-badge.admin {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
             color: white;
         }
 
-        .preview-role.registrar {
+        .preview-role-badge.registrar {
             background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
             color: white;
         }
 
-        .preview-role.teacher {
+        .preview-role-badge.teacher {
             background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
             color: white;
         }
 
-        .preview-role.student {
+        .preview-role-badge.student {
             background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
             color: white;
         }
 
+        .preview-email {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .preview-email i {
+            color: var(--primary);
+        }
+
+        /* Form Actions */
         .form-actions {
             display: flex;
             gap: 15px;
@@ -605,11 +607,11 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         .btn-submit {
             flex: 1;
-            background: #0B4F2E;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             color: white;
-            padding: 14px;
+            padding: 14px 25px;
             border: none;
-            border-radius: 12px;
+            border-radius: 14px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
@@ -621,7 +623,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         .btn-submit:hover {
-            background: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -630,9 +631,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             flex: 1;
             background: white;
             color: var(--text-secondary);
-            padding: 14px;
+            padding: 14px 25px;
             border: 2px solid var(--border-color);
-            border-radius: 12px;
+            border-radius: 14px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
@@ -646,8 +647,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         .btn-cancel:hover {
-            border-color: #dc3545;
-            color: #dc3545;
+            border-color: var(--danger);
+            color: var(--danger);
             background: #fff8f8;
         }
 
@@ -682,12 +683,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 padding: 20px;
             }
             
-            .dashboard-header {
-                flex-direction: column;
-                gap: 15px;
-                align-items: flex-start;
-            }
-            
             .welcome-card {
                 flex-direction: column;
                 text-align: center;
@@ -696,19 +691,20 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             
             .form-row {
                 grid-template-columns: 1fr;
-            }
-            
-            .form-actions {
-                flex-direction: column;
+                gap: 0;
             }
             
             .form-card {
                 padding: 25px;
             }
             
-            .preview-item {
+            .preview-content {
                 flex-direction: column;
                 text-align: center;
+            }
+            
+            .form-actions {
+                flex-direction: column;
             }
         }
     </style>
@@ -763,7 +759,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         <div class="main-content">
             <!-- Header -->
             <div class="dashboard-header">
-                <h1>Add New Account</h1>
+                <h1>
+                    <i class="fas fa-user-plus"></i>
+                    Add New Account
+                </h1>
                 <p>Create a new user account in the system</p>
             </div>
 
@@ -785,131 +784,128 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                     <?php echo $error; ?>
                 </div>
             <?php endif; ?>
-            
-            <?php if($success): ?>
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i>
-                    <?php echo $success; ?>
-                </div>
-            <?php endif; ?>
 
             <!-- Form Card -->
-            <div class="form-card">
-                <h3>
-                    <i class="fas fa-user-plus"></i>
-                    Account Information
-                </h3>
+            <div class="form-container">
+                <div class="form-card">
+                    <h3>
+                        <i class="fas fa-id-card"></i>
+                        Account Information
+                    </h3>
 
-                <form method="POST" action="" id="accountForm">
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Full Name <span>*</span></label>
-                            <input type="text" 
-                                   id="fullname" 
-                                   name="fullname" 
-                                   placeholder="e.g., Juan Dela Cruz" 
-                                   value="<?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : ''; ?>" 
-                                   required>
-                        </div>
+                    <form method="POST" action="" id="accountForm">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Full Name <span>*</span></label>
+                                <input type="text" 
+                                       id="fullname" 
+                                       name="fullname" 
+                                       placeholder="e.g., Juan Dela Cruz" 
+                                       value="<?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : ''; ?>" 
+                                       required>
+                            </div>
 
-                        <div class="form-group">
-                            <label>Email Address <span>*</span></label>
-                            <input type="email" 
-                                   id="email" 
-                                   name="email" 
-                                   placeholder="user@plshs.edu.ph" 
-                                   value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" 
-                                   required>
-                        </div>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>ID Number</label>
-                            <input type="text" 
-                                   id="id_number" 
-                                   name="id_number" 
-                                   placeholder="e.g., EMP-2024-001" 
-                                   value="<?php echo isset($_POST['id_number']) ? htmlspecialchars($_POST['id_number']) : ''; ?>">
-                            <div class="form-hint">
-                                <i class="fas fa-info-circle"></i>
-                                Leave blank for auto-generated
+                            <div class="form-group">
+                                <label>Email Address <span>*</span></label>
+                                <input type="email" 
+                                       id="email" 
+                                       name="email" 
+                                       placeholder="user@plshs.edu.ph" 
+                                       value="<?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : ''; ?>" 
+                                       required>
                             </div>
                         </div>
 
-                        <div class="form-group">
-                            <label>Role <span>*</span></label>
-                            <select id="role" name="role" required>
-                                <option value="">Select Role</option>
-                                <option value="Admin" <?php echo isset($_POST['role']) && $_POST['role'] == 'Admin' ? 'selected' : ''; ?>>Admin</option>
-                                <option value="Registrar" <?php echo isset($_POST['role']) && $_POST['role'] == 'Registrar' ? 'selected' : ''; ?>>Registrar</option>
-                                <option value="Teacher" <?php echo isset($_POST['role']) && $_POST['role'] == 'Teacher' ? 'selected' : ''; ?>>Teacher</option>
-                                <option value="Student" <?php echo isset($_POST['role']) && $_POST['role'] == 'Student' ? 'selected' : ''; ?>>Student</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Password <span>*</span></label>
-                            <input type="password" 
-                                   id="password" 
-                                   name="password" 
-                                   required>
-                            <div class="password-strength">
-                                <div class="password-strength-bar" id="passwordStrength"></div>
-                            </div>
-                            <div class="password-strength-text" id="passwordStrengthText">
-                                <i class="fas fa-info-circle"></i>
-                                <span>Minimum 6 characters</span>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label>Confirm Password <span>*</span></label>
-                            <input type="password" 
-                                   id="confirm_password" 
-                                   name="confirm_password" 
-                                   required>
-                            <div class="form-hint" id="passwordMatch">
-                                <i class="fas fa-info-circle"></i>
-                                <span>Re-enter your password</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Live Preview -->
-                    <div class="role-preview">
-                        <h4><i class="fas fa-eye"></i> Account Preview</h4>
-                        <div class="preview-item">
-                            <div class="preview-avatar" id="previewInitial">
-                                <?php 
-                                $initial = isset($_POST['fullname']) ? strtoupper(substr($_POST['fullname'], 0, 1)) : 'U';
-                                echo $initial;
-                                ?>
-                            </div>
-                            <div class="preview-details">
-                                <h5 id="previewName"><?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : 'New User'; ?></h5>
-                                <div id="previewRole" class="preview-role <?php echo isset($_POST['role']) ? strtolower($_POST['role']) : 'student'; ?>">
-                                    <?php echo isset($_POST['role']) ? $_POST['role'] : 'Student'; ?>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>ID Number</label>
+                                <input type="text" 
+                                       id="id_number" 
+                                       name="id_number" 
+                                       placeholder="e.g., EMP-2024-001" 
+                                       value="<?php echo isset($_POST['id_number']) ? htmlspecialchars($_POST['id_number']) : ''; ?>">
+                                <div class="form-hint">
+                                    <i class="fas fa-info-circle"></i>
+                                    Leave blank for auto-generated
                                 </div>
-                                <div class="form-hint" style="margin-top: 10px;" id="previewEmail">
-                                    <i class="fas fa-envelope"></i>
-                                    <?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : 'user@plshs.edu.ph'; ?>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Role <span>*</span></label>
+                                <select id="role" name="role" required>
+                                    <option value="">Select Role</option>
+                                    <option value="Admin" <?php echo isset($_POST['role']) && $_POST['role'] == 'Admin' ? 'selected' : ''; ?>>Admin</option>
+                                    <option value="Registrar" <?php echo isset($_POST['role']) && $_POST['role'] == 'Registrar' ? 'selected' : ''; ?>>Registrar</option>
+                                    <option value="Teacher" <?php echo isset($_POST['role']) && $_POST['role'] == 'Teacher' ? 'selected' : ''; ?>>Teacher</option>
+                                    <option value="Student" <?php echo isset($_POST['role']) && $_POST['role'] == 'Student' ? 'selected' : ''; ?>>Student</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Password <span>*</span></label>
+                                <input type="password" 
+                                       id="password" 
+                                       name="password" 
+                                       placeholder="Create a password"
+                                       required>
+                                <div class="password-strength">
+                                    <div class="password-strength-bar" id="passwordStrength"></div>
+                                </div>
+                                <div class="form-hint" id="passwordStrengthText">
+                                    <i class="fas fa-info-circle"></i>
+                                    <span>Minimum 6 characters</span>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Confirm Password <span>*</span></label>
+                                <input type="password" 
+                                       id="confirm_password" 
+                                       name="confirm_password" 
+                                       placeholder="Re-enter your password"
+                                       required>
+                                <div class="form-hint" id="passwordMatch">
+                                    <i class="fas fa-info-circle"></i>
+                                    <span>Re-enter your password</span>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <div class="form-actions">
-                        <button type="submit" class="btn-submit">
-                            <i class="fas fa-save"></i> Create Account
-                        </button>
-                        <a href="manage_accounts.php" class="btn-cancel">
-                            <i class="fas fa-times"></i> Cancel
-                        </a>
-                    </div>
-                </form>
+                        <!-- Live Preview -->
+                        <div class="preview-card">
+                            <h4><i class="fas fa-eye"></i> Account Preview</h4>
+                            <div class="preview-content">
+                                <div class="preview-avatar" id="previewInitial">
+                                    <?php 
+                                    $initial = isset($_POST['fullname']) ? strtoupper(substr($_POST['fullname'], 0, 1)) : 'U';
+                                    echo $initial;
+                                    ?>
+                                </div>
+                                <div class="preview-info">
+                                    <h5 id="previewName"><?php echo isset($_POST['fullname']) ? htmlspecialchars($_POST['fullname']) : 'New User'; ?></h5>
+                                    <div id="previewRole" class="preview-role-badge <?php echo isset($_POST['role']) ? strtolower($_POST['role']) : 'student'; ?>">
+                                        <?php echo isset($_POST['role']) ? $_POST['role'] : 'Student'; ?>
+                                    </div>
+                                    <div class="preview-email" id="previewEmail">
+                                        <i class="fas fa-envelope"></i>
+                                        <?php echo isset($_POST['email']) ? htmlspecialchars($_POST['email']) : 'user@plshs.edu.ph'; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="submit" class="btn-submit">
+                                <i class="fas fa-save"></i> Create Account
+                            </button>
+                            <a href="manage_accounts.php" class="btn-cancel">
+                                <i class="fas fa-times"></i> Cancel
+                            </a>
+                        </div>
+                    </form>
+                </div>
             </div>
         </div>
     </div>
@@ -939,9 +935,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             // Update role
             const role = roleSelect.value || 'Student';
             previewRole.textContent = role;
-            
-            // Update role class
-            previewRole.className = 'preview-role ' + role.toLowerCase();
+            previewRole.className = 'preview-role-badge ' + role.toLowerCase();
         }
 
         fullnameInput.addEventListener('input', updatePreview);
@@ -959,7 +953,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             const password = passwordInput.value;
             let strength = 0;
             let strengthLabel = '';
-            let strengthColor = '';
 
             if (password.length >= 6) strength += 1;
             if (password.match(/[a-z]+/)) strength += 1;
@@ -967,33 +960,25 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             if (password.match(/[0-9]+/)) strength += 1;
             if (password.match(/[$@#&!]+/)) strength += 1;
 
-            switch(strength) {
-                case 0:
-                case 1:
-                    strengthBar.style.width = '20%';
-                    strengthBar.style.backgroundColor = '#dc3545';
-                    strengthLabel = 'Weak';
-                    strengthColor = 'strength-weak';
-                    break;
-                case 2:
-                case 3:
-                    strengthBar.style.width = '60%';
-                    strengthBar.style.backgroundColor = '#ffc107';
-                    strengthLabel = 'Medium';
-                    strengthColor = 'strength-medium';
-                    break;
-                case 4:
-                case 5:
-                    strengthBar.style.width = '100%';
-                    strengthBar.style.backgroundColor = '#28a745';
-                    strengthLabel = 'Strong';
-                    strengthColor = 'strength-strong';
-                    break;
+            if (strength <= 1) {
+                strengthBar.style.width = '25%';
+                strengthBar.style.backgroundColor = '#dc3545';
+                strengthLabel = 'Weak';
+                strengthText.innerHTML = `<i class="fas fa-exclamation-circle"></i> <span class="strength-weak">Password strength: ${strengthLabel}</span>`;
+            } else if (strength <= 3) {
+                strengthBar.style.width = '60%';
+                strengthBar.style.backgroundColor = '#ffc107';
+                strengthLabel = 'Medium';
+                strengthText.innerHTML = `<i class="fas fa-shield-alt"></i> <span class="strength-medium">Password strength: ${strengthLabel}</span>`;
+            } else if (strength >= 4) {
+                strengthBar.style.width = '100%';
+                strengthBar.style.backgroundColor = '#28a745';
+                strengthLabel = 'Strong';
+                strengthText.innerHTML = `<i class="fas fa-shield-alt"></i> <span class="strength-strong">Password strength: ${strengthLabel}</span>`;
             }
 
-            if (password.length > 0) {
-                strengthText.innerHTML = `<i class="fas fa-shield-alt"></i> <span class="${strengthColor}">Password strength: ${strengthLabel}</span>`;
-            } else {
+            if (password.length === 0) {
+                strengthBar.style.width = '0';
                 strengthText.innerHTML = `<i class="fas fa-info-circle"></i> <span>Minimum 6 characters</span>`;
             }
         }

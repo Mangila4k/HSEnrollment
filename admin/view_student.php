@@ -18,22 +18,18 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $student_id = $_GET['id'];
 
-// Get student details
+// Get student details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$student_id]);
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$student) {
     header("Location: students.php");
     exit();
 }
 
-$student = $result->fetch_assoc();
-$stmt->close();
-
-// Get student's enrollment history
+// Get student's enrollment history with grade level info
 $enrollments_query = "
     SELECT e.*, g.grade_name 
     FROM enrollments e 
@@ -42,61 +38,49 @@ $enrollments_query = "
     ORDER BY e.created_at DESC
 ";
 $stmt = $conn->prepare($enrollments_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$enrollments = $stmt->get_result();
-$current_enrollment = $enrollments->fetch_assoc(); // First row is current enrollment
-$stmt->close();
+$stmt->execute([$student_id]);
+$enrollments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$current_enrollment = !empty($enrollments) ? $enrollments[0] : null; // First row is current enrollment
 
-// Reset pointer for history table
-$enrollments->data_seek(0);
-
-// Get student's attendance records
-$attendance_query = "
-    SELECT a.*, sub.subject_name
-    FROM attendance a
-    LEFT JOIN subjects sub ON a.subject_id = sub.id
-    WHERE a.student_id = ?
-    ORDER BY a.date DESC
-    LIMIT 10
-";
-$stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$attendance = $stmt->get_result();
-$stmt->close();
-
-// Calculate attendance statistics
-$attendance_stats = [
-    'present' => 0,
-    'absent' => 0,
-    'late' => 0,
-    'total' => 0
-];
-
-$stats_query = "
-    SELECT status, COUNT(*) as count
-    FROM attendance
-    WHERE student_id = ?
-    GROUP BY status
-";
-$stmt = $conn->prepare($stats_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$stats_result = $stmt->get_result();
-while($row = $stats_result->fetch_assoc()) {
-    $attendance_stats[strtolower($row['status'])] = $row['count'];
-    $attendance_stats['total'] += $row['count'];
+// Function to check if strand should be shown (only for Grade 11 and 12)
+function shouldShowStrand($grade_name) {
+    return in_array($grade_name, ['Grade 11', 'Grade 12']);
 }
-$stmt->close();
-
-$attendance_rate = $attendance_stats['total'] > 0 
-    ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
-    : 0;
 
 // Get account creation info
 $account_created = $student['created_at'];
 $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
+
+// Handle delete request
+if(isset($_GET['delete']) && $_GET['delete'] == $student_id) {
+    try {
+        // Start transaction
+        $conn->beginTransaction();
+        
+        // Delete attendance records first (foreign key constraint)
+        $delete_attendance = "DELETE FROM attendance WHERE student_id = ?";
+        $stmt = $conn->prepare($delete_attendance);
+        $stmt->execute([$student_id]);
+        
+        // Delete enrollments
+        $delete_enrollments = "DELETE FROM enrollments WHERE student_id = ?";
+        $stmt = $conn->prepare($delete_enrollments);
+        $stmt->execute([$student_id]);
+        
+        // Delete the student
+        $delete_student = "DELETE FROM users WHERE id = ? AND role = 'Student'";
+        $stmt = $conn->prepare($delete_student);
+        $stmt->execute([$student_id]);
+        
+        $conn->commit();
+        $_SESSION['success_message'] = "Student deleted successfully!";
+        header("Location: students.php");
+        exit();
+    } catch(Exception $e) {
+        $conn->rollBack();
+        $_SESSION['error_message'] = "Error deleting student: " . $e->getMessage();
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -615,50 +599,17 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             width: 20px;
         }
 
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .stat-card {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 15px;
-            text-align: center;
-        }
-
-        .stat-number {
-            font-size: 24px;
-            font-weight: 700;
-            color: #0B4F2E;
-            margin-bottom: 5px;
-        }
-
-        .stat-label {
-            font-size: 12px;
-            color: var(--text-secondary);
-        }
-
-        .stat-card.present .stat-number { color: #28a745; }
-        .stat-card.absent .stat-number { color: #dc3545; }
-        .stat-card.late .stat-number { color: #ffc107; }
-
         /* Tables */
         .table-container {
             overflow-x: auto;
         }
 
-        .enrollments-table,
-        .attendance-table {
+        .enrollments-table {
             width: 100%;
             border-collapse: collapse;
         }
 
-        .enrollments-table th,
-        .attendance-table th {
+        .enrollments-table th {
             text-align: left;
             padding: 12px;
             background: #f8f9fa;
@@ -670,16 +621,14 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             border-bottom: 2px solid var(--border-color);
         }
 
-        .enrollments-table td,
-        .attendance-table td {
+        .enrollments-table td {
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             font-size: 14px;
         }
 
-        .enrollments-table tbody tr:hover,
-        .attendance-table tbody tr:hover {
+        .enrollments-table tbody tr:hover {
             background: var(--hover-color);
         }
 
@@ -704,21 +653,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
         .badge-rejected {
             background: rgba(220, 53, 69, 0.1);
             color: #dc3545;
-        }
-
-        .badge-present {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
-        }
-
-        .badge-absent {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-        }
-
-        .badge-late {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
         }
 
         .strand-tag {
@@ -762,10 +696,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
 
         /* Responsive */
         @media (max-width: 1200px) {
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
             .info-grid {
                 grid-template-columns: 1fr;
             }
@@ -824,10 +754,6 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             
             .action-buttons {
                 justify-content: center;
-            }
-            
-            .stats-grid {
-                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -910,6 +836,13 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                 </div>
             <?php endif; ?>
 
+            <?php if(isset($_SESSION['error_message'])): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <?php echo $_SESSION['error_message']; unset($_SESSION['error_message']); ?>
+                </div>
+            <?php endif; ?>
+
             <!-- Student Profile Card -->
             <div class="profile-card">
                 <div class="profile-avatar-large">
@@ -976,13 +909,15 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                             <?php echo htmlspecialchars($current_enrollment['grade_name']); ?>
                         </div>
                     </div>
+                    <?php if(shouldShowStrand($current_enrollment['grade_name']) && !empty($current_enrollment['strand'])): ?>
                     <div class="info-item">
                         <div class="info-label">Strand</div>
                         <div class="info-value">
                             <i class="fas fa-tag"></i>
-                            <?php echo $current_enrollment['strand'] ?: 'Not Applicable'; ?>
+                            <?php echo htmlspecialchars($current_enrollment['strand']); ?>
                         </div>
                     </div>
+                    <?php endif; ?>
                     <div class="info-item">
                         <div class="info-label">School Year</div>
                         <div class="info-value">
@@ -999,7 +934,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                     </div>
                 </div>
 
-                <?php if($current_enrollment['form_138']): ?>
+                <?php if(isset($current_enrollment['form_138']) && $current_enrollment['form_138']): ?>
                 <div class="info-item" style="margin-top: 15px;">
                     <div class="info-label">Form 138</div>
                     <div class="info-value">
@@ -1013,78 +948,13 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             </div>
             <?php endif; ?>
 
-            <!-- Attendance Statistics -->
-            <div class="detail-card">
-                <div class="card-header">
-                    <h3><i class="fas fa-calendar-check"></i> Attendance Overview</h3>
-                    <a href="attendance.php?student=<?php echo $student_id; ?>" class="view-link">
-                        View All <i class="fas fa-arrow-right"></i>
-                    </a>
-                </div>
-
-                <div class="stats-grid">
-                    <div class="stat-card present">
-                        <div class="stat-number"><?php echo $attendance_stats['present']; ?></div>
-                        <div class="stat-label">Present</div>
-                    </div>
-                    <div class="stat-card absent">
-                        <div class="stat-number"><?php echo $attendance_stats['absent']; ?></div>
-                        <div class="stat-label">Absent</div>
-                    </div>
-                    <div class="stat-card late">
-                        <div class="stat-number"><?php echo $attendance_stats['late']; ?></div>
-                        <div class="stat-label">Late</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $attendance_rate; ?>%</div>
-                        <div class="stat-label">Rate</div>
-                    </div>
-                </div>
-
-                <?php if($attendance && $attendance->num_rows > 0): ?>
-                <div class="table-container">
-                    <table class="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Subject</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            $count = 0;
-                            while($row = $attendance->fetch_assoc()): 
-                                if($count++ >= 5) break;
-                            ?>
-                                <tr>
-                                    <td><?php echo date('M d, Y', strtotime($row['date'])); ?></td>
-                                    <td><?php echo htmlspecialchars($row['subject_name']); ?></td>
-                                    <td>
-                                        <span class="badge badge-<?php echo strtolower($row['status']); ?>">
-                                            <?php echo $row['status']; ?>
-                                        </span>
-                                    </td>
-                                </tr>
-                            <?php endwhile; ?>
-                        </tbody>
-                    </table>
-                </div>
-                <?php else: ?>
-                <div class="no-data" style="padding: 20px;">
-                    <i class="fas fa-calendar-times"></i>
-                    <p>No attendance records found.</p>
-                </div>
-                <?php endif; ?>
-            </div>
-
             <!-- Enrollment History -->
             <div class="detail-card">
                 <div class="card-header">
                     <h3><i class="fas fa-history"></i> Enrollment History</h3>
                 </div>
 
-                <?php if($enrollments && $enrollments->num_rows > 0): ?>
+                <?php if(!empty($enrollments)): ?>
                 <div class="table-container">
                     <table class="enrollments-table">
                         <thead>
@@ -1098,17 +968,17 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                             </tr>
                         </thead>
                         <tbody>
-                            <?php while($row = $enrollments->fetch_assoc()): ?>
+                            <?php foreach($enrollments as $row): ?>
                                 <tr>
                                     <td><?php echo htmlspecialchars($row['school_year']); ?></td>
                                     <td><?php echo htmlspecialchars($row['grade_name']); ?></td>
                                     <td>
-                                        <?php if($row['strand']): ?>
-                                            <span class="strand-tag"><?php echo $row['strand']; ?></span>
+                                        <?php if(shouldShowStrand($row['grade_name']) && !empty($row['strand'])): ?>
+                                            <span class="strand-tag"><?php echo htmlspecialchars($row['strand']); ?></span>
                                         <?php else: ?>
                                             —
                                         <?php endif; ?>
-                                    </td>
+                                                                        </td>
                                     <td>
                                         <span class="badge badge-<?php echo strtolower($row['status']); ?>">
                                             <?php echo $row['status']; ?>
@@ -1121,7 +991,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                                         </a>
                                     </td>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>

@@ -18,20 +18,16 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $student_id = $_GET['id'];
 
-// Get student details
+// Get student details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$student_id]);
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$student) {
     header("Location: students.php");
     exit();
 }
-
-$student = $result->fetch_assoc();
-$stmt->close();
 
 // Get student's current enrollment
 $enrollment_query = "
@@ -42,17 +38,16 @@ $enrollment_query = "
     ORDER BY e.id DESC LIMIT 1
 ";
 $stmt = $conn->prepare($enrollment_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$enrollment = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$stmt->execute([$student_id]);
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // Handle form submission
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
     if(isset($_POST['update_student'])) {
         $fullname = trim($_POST['fullname']);
         $email = trim($_POST['email']);
-        $id_number = !empty($_POST['id_number']) ? trim($_POST['id_number']) : null;
+        // ID number is NOT updated from form - it remains as is
+        $id_number = $student['id_number']; // Keep existing ID number
         
         // Validation
         $errors = [];
@@ -70,49 +65,26 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         // Check if email already exists (excluding current student)
         if(empty($errors)) {
             $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-            $check_email->bind_param("si", $email, $student_id);
-            $check_email->execute();
-            $check_email->store_result();
+            $check_email->execute([$email, $student_id]);
             
-            if($check_email->num_rows > 0) {
+            if($check_email->rowCount() > 0) {
                 $errors[] = "Email address already registered to another user";
             }
-            $check_email->close();
-        }
-        
-        // Check if ID number already exists (if provided and excluding current student)
-        if(empty($errors) && $id_number) {
-            $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-            $check_id->bind_param("si", $id_number, $student_id);
-            $check_id->execute();
-            $check_id->store_result();
-            
-            if($check_id->num_rows > 0) {
-                $errors[] = "ID number already exists for another user";
-            }
-            $check_id->close();
         }
         
         // If no errors, update the student
         if(empty($errors)) {
-            if($id_number) {
-                $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = ? WHERE id = ?";
-                $update_stmt = $conn->prepare($update_query);
-                $update_stmt->bind_param("sssi", $fullname, $email, $id_number, $student_id);
-            } else {
-                $update_query = "UPDATE users SET fullname = ?, email = ?, id_number = NULL WHERE id = ?";
-                $update_stmt = $conn->prepare($update_query);
-                $update_stmt->bind_param("ssi", $fullname, $email, $student_id);
-            }
+            $update_query = "UPDATE users SET fullname = ?, email = ? WHERE id = ?";
+            $update_stmt = $conn->prepare($update_query);
+            $update_stmt->execute([$fullname, $email, $student_id]);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) {
                 $_SESSION['success_message'] = "Student information updated successfully!";
                 header("Location: view_student.php?id=" . $student_id);
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -142,16 +114,15 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
             $update_query = "UPDATE users SET password = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("si", $hashed_password, $student_id);
+            $update_stmt->execute([$hashed_password, $student_id]);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->rowCount() >= 0) {
                 $_SESSION['success_message'] = "Password reset successfully!";
                 header("Location: view_student.php?id=" . $student_id);
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error: " . $conn->errorInfo()[2];
             }
-            $update_stmt->close();
         }
         
         if(!empty($errors)) {
@@ -496,6 +467,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             color: var(--text-secondary);
             font-size: 14px;
             margin-bottom: 10px;
+            flex-wrap: wrap;
         }
 
         .student-meta i {
@@ -602,9 +574,11 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             background: #fff8f8;
         }
 
-        .form-group input:disabled {
+        .form-group input:disabled,
+        .form-group input[readonly] {
             background: #e9ecef;
             cursor: not-allowed;
+            color: #6c757d;
         }
 
         .form-hint {
@@ -618,6 +592,24 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         .form-hint i {
             color: #0B4F2E;
+        }
+
+        .id-info {
+            background: #e8f4f8;
+            border-left: 4px solid #17a2b8;
+            padding: 10px 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #0c5460;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .id-info i {
+            font-size: 18px;
+            color: #17a2b8;
         }
 
         /* Password Reset Section */
@@ -853,6 +845,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php" class="active"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -923,6 +916,17 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             <div class="form-card">
                 <h3><i class="fas fa-user-edit"></i> Edit Personal Information</h3>
                 
+                <!-- Info about ID number -->
+                <div class="id-info">
+                    <i class="fas fa-info-circle"></i>
+                    <div>
+                        <strong>Note:</strong> Student ID number is automatically generated and cannot be edited. 
+                        <?php if(!$student['id_number']): ?>
+                            It will be assigned when the student is approved for enrollment.
+                        <?php endif; ?>
+                    </div>
+                </div>
+                
                 <form method="POST" action="" id="editStudentForm">
                     <div class="form-row">
                         <div class="form-group">
@@ -938,10 +942,13 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 
                     <div class="form-group">
                         <label>Student ID Number</label>
-                        <input type="text" name="id_number" value="<?php echo htmlspecialchars($student['id_number'] ?? ''); ?>" placeholder="Enter student ID">
+                        <input type="text" name="id_number" value="<?php echo htmlspecialchars($student['id_number'] ?? 'Not assigned yet'); ?>" readonly disabled>
                         <div class="form-hint">
-                            <i class="fas fa-info-circle"></i>
-                            Leave blank if student doesn't have an ID yet
+                            <i class="fas fa-lock"></i>
+                            Student ID number is automatically generated and cannot be manually edited.
+                            <?php if(!$student['id_number']): ?>
+                                It will be generated when the enrollment is approved.
+                            <?php endif; ?>
                         </div>
                     </div>
 

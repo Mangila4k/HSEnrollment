@@ -25,13 +25,15 @@ if(isset($_GET['action']) && isset($_GET['id'])) {
         $success_message = "Enrollment rejected.";
     }
     
-    $conn->query("UPDATE enrollments SET status='$status' WHERE id='$enrollment_id'");
+    $stmt = $conn->prepare("UPDATE enrollments SET status = ? WHERE id = ?");
+    $stmt->execute([$status, $enrollment_id]);
 }
 
 // Handle enrollment deletion
 if(isset($_GET['delete'])) {
     $enrollment_id = $_GET['delete'];
-    $conn->query("DELETE FROM enrollments WHERE id='$enrollment_id'");
+    $stmt = $conn->prepare("DELETE FROM enrollments WHERE id = ?");
+    $stmt->execute([$enrollment_id]);
     $success_message = "Enrollment record deleted successfully!";
 }
 
@@ -43,12 +45,12 @@ if(isset($_POST['add_enrollment'])) {
     $school_year = $_POST['school_year'];
     $status = $_POST['status'];
     
-    $insert = $conn->query("INSERT INTO enrollments (student_id, grade_id, strand, school_year, status, created_at) 
-                            VALUES ('$student_id', '$grade_id', '$strand', '$school_year', '$status', NOW())");
-    if($insert) {
+    $stmt = $conn->prepare("INSERT INTO enrollments (student_id, grade_id, strand, school_year, status, created_at) 
+                            VALUES (?, ?, ?, ?, ?, NOW())");
+    if($stmt->execute([$student_id, $grade_id, $strand, $school_year, $status])) {
         $success_message = "New enrollment added successfully!";
     } else {
-        $error_message = "Error adding enrollment: " . $conn->error;
+        $error_message = "Error adding enrollment: " . $conn->errorInfo()[2];
     }
 }
 
@@ -63,27 +65,41 @@ $query = "SELECT e.*, u.fullname, u.email, u.id_number, g.grade_name
           LEFT JOIN grade_levels g ON e.grade_id = g.id 
           WHERE 1=1";
 
+$params = [];
+
 if($search) {
-    $query .= " AND (u.fullname LIKE '%$search%' OR u.email LIKE '%$search%' OR u.id_number LIKE '%$search%' OR e.school_year LIKE '%$search%')";
+    $query .= " AND (u.fullname LIKE ? OR u.email LIKE ? OR u.id_number LIKE ? OR e.school_year LIKE ?)";
+    $search_param = "%$search%";
+    $params = array_merge($params, [$search_param, $search_param, $search_param, $search_param]);
 }
 
 if($status_filter) {
-    $query .= " AND e.status = '$status_filter'";
+    $query .= " AND e.status = ?";
+    $params[] = $status_filter;
 }
 
 $query .= " ORDER BY e.id DESC";
 
-$enrollments = $conn->query($query);
+$stmt = $conn->prepare($query);
+$stmt->execute($params);
+$enrollments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get counts for dashboard
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'")->fetch_assoc()['count'];
-$enrolled_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'")->fetch_assoc()['count'];
-$rejected_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'")->fetch_assoc()['count'];
-$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments")->fetch_assoc()['count'];
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Pending'");
+$pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'");
+$enrolled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Rejected'");
+$rejected_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments");
+$total_enrollments = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get students and grades for dropdown
-$students = $conn->query("SELECT * FROM users WHERE role='Student' ORDER BY fullname");
-$grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$students = $conn->query("SELECT * FROM users WHERE role='Student' ORDER BY fullname")->fetchAll(PDO::FETCH_ASSOC);
+$grades = $conn->query("SELECT * FROM grade_levels ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -1081,6 +1097,7 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php" class="active"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -1205,7 +1222,7 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             <div class="table-card">
                 <div class="table-header">
                     <h3><i class="fas fa-file-signature"></i> Enrollment Records</h3>
-                    <span class="grade-tag">Total: <?php echo $enrollments ? $enrollments->num_rows : 0; ?> records</span>
+                    <span class="grade-tag">Total: <?php echo count($enrollments); ?> records</span>
                 </div>
 
                 <table class="enrollments-table">
@@ -1220,8 +1237,8 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if($enrollments && $enrollments->num_rows > 0): ?>
-                            <?php while($row = $enrollments->fetch_assoc()): ?>
+                        <?php if(count($enrollments) > 0): ?>
+                            <?php foreach($enrollments as $row): ?>
                                 <tr>
                                     <td>
                                         <div class="student-info">
@@ -1272,7 +1289,7 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                                         </div>
                                     </td>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
                                 <td colspan="6">
@@ -1324,16 +1341,9 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                         <label>Select Student</label>
                         <select name="student_id" required>
                             <option value="">-- Choose Student --</option>
-                            <?php 
-                            if($students) {
-                                $students->data_seek(0);
-                                while($s = $students->fetch_assoc()): 
-                            ?>
+                            <?php foreach($students as $s): ?>
                                 <option value="<?php echo $s['id']; ?>"><?php echo htmlspecialchars($s['fullname']); ?> (<?php echo $s['email']; ?>)</option>
-                            <?php 
-                                endwhile;
-                            } 
-                            ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     
@@ -1341,16 +1351,9 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
                         <label>Grade Level</label>
                         <select name="grade_id" required>
                             <option value="">-- Select Grade --</option>
-                            <?php 
-                            if($grades) {
-                                $grades->data_seek(0);
-                                while($g = $grades->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grades as $g): ?>
                                 <option value="<?php echo $g['id']; ?>"><?php echo $g['grade_name']; ?></option>
-                            <?php 
-                                endwhile;
-                            } 
-                            ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     
@@ -1490,8 +1493,5 @@ $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
             newWindow.print();
         }
     </script>
-    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
-    <i class="fas fa-layer-group"></i><span>Sections</span>
-</a></li>
 </body>
 </html>

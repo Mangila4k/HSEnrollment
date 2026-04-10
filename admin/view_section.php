@@ -18,7 +18,7 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $section_id = $_GET['id'];
 
-// Get section details
+// Get section details - PDO version
 $query = "
     SELECT s.*, g.grade_name, u.fullname as adviser_name, u.email as adviser_email, u.id as adviser_id
     FROM sections s
@@ -27,17 +27,13 @@ $query = "
     WHERE s.id = ?
 ";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $section_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$section_id]);
+$section = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$section) {
     header("Location: sections.php");
     exit();
 }
-
-$section = $result->fetch_assoc();
-$stmt->close();
 
 // Get students enrolled in this section's grade level
 $students_query = "
@@ -48,11 +44,9 @@ $students_query = "
     ORDER BY u.fullname
 ";
 $stmt = $conn->prepare($students_query);
-$stmt->bind_param("i", $section['grade_id']);
-$stmt->execute();
-$students = $stmt->get_result();
-$total_students = $students->num_rows;
-$stmt->close();
+$stmt->execute([$section['grade_id']]);
+$students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$total_students = count($students);
 
 // Get subjects for this grade level
 $subjects_query = "
@@ -61,11 +55,9 @@ $subjects_query = "
     ORDER BY subject_name
 ";
 $stmt = $conn->prepare($subjects_query);
-$stmt->bind_param("i", $section['grade_id']);
-$stmt->execute();
-$subjects = $stmt->get_result();
-$total_subjects = $subjects->num_rows;
-$stmt->close();
+$stmt->execute([$section['grade_id']]);
+$subjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$total_subjects = count($subjects);
 
 // Get attendance statistics for this section
 $attendance_stats = [
@@ -77,22 +69,23 @@ $attendance_stats = [
 
 if($total_students > 0) {
     $student_ids = [];
-    $students->data_seek(0);
-    while($student = $students->fetch_assoc()) {
+    foreach($students as $student) {
         $student_ids[] = $student['id'];
     }
-    $students->data_seek(0);
     
     if(!empty($student_ids)) {
-        $ids_string = implode(',', $student_ids);
+        $placeholders = implode(',', array_fill(0, count($student_ids), '?'));
         $stats_query = "
             SELECT status, COUNT(*) as count
             FROM attendance
-            WHERE student_id IN ($ids_string)
+            WHERE student_id IN ($placeholders)
             GROUP BY status
         ";
-        $stats_result = $conn->query($stats_query);
-        while($row = $stats_result->fetch_assoc()) {
+        $stmt = $conn->prepare($stats_query);
+        $stmt->execute($student_ids);
+        $stats_result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach($stats_result as $row) {
             $attendance_stats[strtolower($row['status'])] = $row['count'];
             $attendance_stats['total'] += $row['count'];
         }
@@ -103,14 +96,64 @@ $attendance_rate = $attendance_stats['total'] > 0
     ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
     : 0;
 
-// Get schedule (placeholder - you can expand this if you have a schedules table)
-$schedule = [
-    'Monday' => ['08:00 AM - 09:00 AM' => 'Mathematics', '09:00 AM - 10:00 AM' => 'Science'],
-    'Tuesday' => ['08:00 AM - 09:00 AM' => 'English', '09:00 AM - 10:00 AM' => 'Filipino'],
-    'Wednesday' => ['08:00 AM - 09:00 AM' => 'Mathematics', '09:00 AM - 10:00 AM' => 'Science'],
-    'Thursday' => ['08:00 AM - 09:00 AM' => 'English', '09:00 AM - 10:00 AM' => 'Filipino'],
-    'Friday' => ['08:00 AM - 09:00 AM' => 'MAPEH', '09:00 AM - 10:00 AM' => 'Araling Panlipunan']
-];
+// Get schedule from class_schedules table
+$schedule_query = "
+    SELECT cs.*, d.day_name, ts.start_time, ts.end_time, sub.subject_name
+    FROM class_schedules cs
+    JOIN days_of_week d ON cs.day_id = d.id
+    JOIN time_slots ts ON cs.time_slot_id = ts.id
+    JOIN subjects sub ON cs.subject_id = sub.id
+    WHERE cs.section_id = ? AND cs.status = 'active'
+    ORDER BY d.day_order, ts.start_time
+";
+$stmt = $conn->prepare($schedule_query);
+$stmt->execute([$section_id]);
+$schedule_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Organize schedule by day
+$schedule = [];
+$days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+foreach($days_order as $day) {
+    $schedule[$day] = [];
+}
+
+foreach($schedule_data as $item) {
+    $time_slot = date('g:i A', strtotime($item['start_time'])) . ' - ' . date('g:i A', strtotime($item['end_time']));
+    $schedule[$item['day_name']][$time_slot] = $item['subject_name'] . ($item['room'] ? ' (' . $item['room'] . ')' : '');
+}
+
+// Handle delete request
+if(isset($_GET['delete']) && $_GET['delete'] == $section_id) {
+    try {
+        // Start transaction
+        $conn->beginTransaction();
+        
+        // First, remove section_id from enrollments (set to NULL)
+        $update_enrollments = "UPDATE enrollments SET section_id = NULL WHERE section_id = ?";
+        $stmt = $conn->prepare($update_enrollments);
+        $stmt->execute([$section_id]);
+        
+        // Delete class schedules for this section
+        $delete_schedules = "DELETE FROM class_schedules WHERE section_id = ?";
+        $stmt = $conn->prepare($delete_schedules);
+        $stmt->execute([$section_id]);
+        
+        // Delete the section
+        $delete_section = "DELETE FROM sections WHERE id = ?";
+        $stmt = $conn->prepare($delete_section);
+        $stmt->execute([$section_id]);
+        
+        $conn->commit();
+        $_SESSION['success_message'] = "Section deleted successfully!";
+        header("Location: sections.php");
+        exit();
+    } catch(Exception $e) {
+        $conn->rollBack();
+        $_SESSION['error_message'] = "Error deleting section: " . $e->getMessage();
+        header("Location: view_section.php?id=" . $section_id);
+        exit();
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -479,6 +522,24 @@ $schedule = [
             box-shadow: 0 5px 15px rgba(0,0,0,0.2);
         }
 
+        .btn-delete {
+            background: #dc3545;
+            color: white;
+            padding: 12px 25px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s;
+        }
+
+        .btn-delete:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+        }
+
         /* Stats Cards */
         .stats-grid {
             display: grid;
@@ -567,6 +628,7 @@ $schedule = [
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
 
         .adviser-info i {
@@ -862,8 +924,8 @@ $schedule = [
                 width: 100%;
             }
             
-            .btn-edit {
-                width: 100%;
+            .btn-edit, .btn-delete {
+                flex: 1;
                 justify-content: center;
             }
             
@@ -964,6 +1026,13 @@ $schedule = [
                 </div>
             <?php endif; ?>
 
+            <?php if(isset($_SESSION['error_message'])): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <?php echo $_SESSION['error_message']; unset($_SESSION['error_message']); ?>
+                </div>
+            <?php endif; ?>
+
             <!-- Section Header -->
             <div class="section-header">
                 <div class="section-title">
@@ -986,6 +1055,9 @@ $schedule = [
                 <div class="action-buttons">
                     <a href="edit_section.php?id=<?php echo $section_id; ?>" class="btn-edit">
                         <i class="fas fa-edit"></i> Edit Section
+                    </a>
+                    <a href="?delete=<?php echo $section_id; ?>" class="btn-delete" onclick="return confirm('Are you sure you want to delete this section? This will also remove section assignments from enrollments and class schedules.')">
+                        <i class="fas fa-trash"></i> Delete Section
                     </a>
                 </div>
             </div>
@@ -1065,7 +1137,7 @@ $schedule = [
                     <span class="section-meta-item"><?php echo $total_students; ?> Students</span>
                 </div>
 
-                <?php if($students && $students->num_rows > 0): ?>
+                <?php if(!empty($students)): ?>
                     <div class="table-container">
                         <table class="students-table">
                             <thead>
@@ -1079,7 +1151,7 @@ $schedule = [
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($student = $students->fetch_assoc()): ?>
+                                <?php foreach($students as $student): ?>
                                     <tr>
                                         <td>
                                             <div class="student-avatar">
@@ -1104,7 +1176,7 @@ $schedule = [
                                             </a>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1124,14 +1196,14 @@ $schedule = [
                     <span class="section-meta-item"><?php echo $total_subjects; ?> Subjects</span>
                 </div>
 
-                <?php if($subjects && $subjects->num_rows > 0): ?>
+                <?php if(!empty($subjects)): ?>
                     <div class="subjects-grid">
-                        <?php while($subject = $subjects->fetch_assoc()): ?>
+                        <?php foreach($subjects as $subject): ?>
                             <div class="subject-item">
                                 <i class="fas fa-book-open"></i>
                                 <span class="subject-name"><?php echo htmlspecialchars($subject['subject_name']); ?></span>
                             </div>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     </div>
                 <?php else: ?>
                     <div class="no-data" style="padding: 20px;">
@@ -1148,18 +1220,37 @@ $schedule = [
                 </div>
 
                 <div class="schedule-grid">
-                    <?php foreach($schedule as $day => $classes): ?>
+                    <?php 
+                    $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+                    foreach($days as $day): 
+                    ?>
                         <div class="day-column">
                             <div class="day-header"><?php echo $day; ?></div>
-                            <?php foreach($classes as $time => $subject): ?>
+                            <?php 
+                            if(isset($schedule[$day]) && !empty($schedule[$day])):
+                                foreach($schedule[$day] as $time => $subject):
+                            ?>
                                 <div class="time-slot">
                                     <div class="time"><?php echo $time; ?></div>
                                     <div class="subject"><?php echo $subject; ?></div>
                                 </div>
-                            <?php endforeach; ?>
-                            <?php for($i = count($classes); $i < 4; $i++): ?>
+                            <?php 
+                                endforeach;
+                                // Add empty slots to fill up to 4 slots
+                                $slot_count = count($schedule[$day]);
+                                for($i = $slot_count; $i < 4; $i++):
+                            ?>
                                 <div class="empty-slot">No class</div>
-                            <?php endfor; ?>
+                            <?php 
+                                endfor;
+                            else:
+                                for($i = 0; $i < 4; $i++):
+                            ?>
+                                <div class="empty-slot">No class</div>
+                            <?php 
+                                endfor;
+                            endif; 
+                            ?>
                         </div>
                     <?php endforeach; ?>
                 </div>

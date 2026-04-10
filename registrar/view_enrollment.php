@@ -36,17 +36,13 @@ $query = "
 ";
 
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $enrollment_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$enrollment_id]);
+$enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$enrollment) {
     header("Location: enrollments.php");
     exit();
 }
-
-$enrollment = $result->fetch_assoc();
-$stmt->close();
 
 // Get enrollment history (previous enrollments of the same student)
 $history_query = "
@@ -58,10 +54,8 @@ $history_query = "
     LIMIT 5
 ";
 $stmt = $conn->prepare($history_query);
-$stmt->bind_param("ii", $enrollment['student_id'], $enrollment_id);
-$stmt->execute();
-$history = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$enrollment['student_id'], $enrollment_id]);
+$history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get student's attendance records
 $attendance_query = "
@@ -73,10 +67,8 @@ $attendance_query = "
     LIMIT 5
 ";
 $stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $enrollment['student_id']);
-$stmt->execute();
-$attendance = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$enrollment['student_id']]);
+$attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Handle status update
 if(isset($_POST['update_status'])) {
@@ -85,16 +77,14 @@ if(isset($_POST['update_status'])) {
     
     $update_query = "UPDATE enrollments SET status = ? WHERE id = ?";
     $stmt = $conn->prepare($update_query);
-    $stmt->bind_param("si", $new_status, $enrollment_id);
     
-    if($stmt->execute()) {
+    if($stmt->execute([$new_status, $enrollment_id])) {
         $_SESSION['success_message'] = "Enrollment status updated successfully!";
         header("Location: view_enrollment.php?id=" . $enrollment_id);
         exit();
     } else {
-        $error_message = "Error updating status: " . $conn->error;
+        $error_message = "Error updating status: " . $conn->errorInfo()[2];
     }
-    $stmt->close();
 }
 ?>
 
@@ -305,56 +295,6 @@ if(isset($_POST['update_status'])) {
 
         .back-btn i {
             color: #0B4F2E;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -676,6 +616,36 @@ if(isset($_POST['update_status'])) {
             display: inline-block;
         }
 
+        .badge-pending {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+        }
+
+        .badge-enrolled {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+
+        .badge-rejected {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+
+        .badge-present {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+
+        .badge-absent {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+
+        .badge-late {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+        }
+
         .no-data {
             text-align: center;
             padding: 30px;
@@ -759,12 +729,6 @@ if(isset($_POST['update_status'])) {
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .student-info-card {
                 flex-direction: column;
                 text-align: center;
@@ -792,6 +756,26 @@ if(isset($_POST['update_status'])) {
                 flex-direction: column;
             }
         }
+
+        @media print {
+            .sidebar,
+            .back-btn,
+            .status-update,
+            .action-buttons,
+            .logout-btn {
+                display: none !important;
+            }
+            
+            .main-content {
+                margin-left: 0 !important;
+                padding: 20px !important;
+            }
+            
+            .detail-card {
+                box-shadow: none !important;
+                border: 1px solid #ddd !important;
+            }
+        }
     </style>
 </head>
 <body>
@@ -817,6 +801,7 @@ if(isset($_POST['update_status'])) {
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php" class="active"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -925,6 +910,39 @@ if(isset($_POST['update_status'])) {
                     </div>
                 </div>
 
+                <?php if($enrollment['form_137']): ?>
+                <div class="info-item">
+                    <div class="info-label">Form 137 (Permanent Record)</div>
+                    <div class="info-value">
+                        <a href="../<?php echo $enrollment['form_137']; ?>" target="_blank" class="document-link">
+                            <i class="fas fa-file-pdf"></i> View Document
+                        </a>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <?php if($enrollment['psa_birth_cert']): ?>
+                <div class="info-item">
+                    <div class="info-label">PSA Birth Certificate</div>
+                    <div class="info-value">
+                        <a href="../<?php echo $enrollment['psa_birth_cert']; ?>" target="_blank" class="document-link">
+                            <i class="fas fa-file-pdf"></i> View Document
+                        </a>
+                    </div>
+                </div>
+                <?php endif; ?>
+
+                <?php if($enrollment['good_moral_cert']): ?>
+                <div class="info-item">
+                    <div class="info-label">Good Moral Certificate</div>
+                    <div class="info-value">
+                        <a href="../<?php echo $enrollment['good_moral_cert']; ?>" target="_blank" class="document-link">
+                            <i class="fas fa-file-pdf"></i> View Document
+                        </a>
+                    </div>
+                </div>
+                <?php endif; ?>
+
                 <!-- Status Update Form -->
                 <div class="status-update">
                     <h4><i class="fas fa-edit"></i> Update Enrollment Status</h4>
@@ -937,10 +955,6 @@ if(isset($_POST['update_status'])) {
                                 <option value="Rejected" <?php echo $enrollment['status'] == 'Rejected' ? 'selected' : ''; ?>>Rejected</option>
                             </select>
                         </div>
-                        <div class="form-group">
-                            <label>Remarks (Optional)</label>
-                            <input type="text" name="remarks" placeholder="Add remarks">
-                        </div>
                         <button type="submit" name="update_status" class="btn-update">
                             <i class="fas fa-save"></i> Update Status
                         </button>
@@ -949,9 +963,6 @@ if(isset($_POST['update_status'])) {
 
                 <!-- Action Buttons -->
                 <div class="action-buttons">
-                    <a href="edit_enrollment.php?id=<?php echo $enrollment['id']; ?>" class="btn-print">
-                        <i class="fas fa-edit"></i> Edit Enrollment
-                    </a>
                     <button onclick="window.print()" class="btn-print">
                         <i class="fas fa-print"></i> Print Details
                     </button>
@@ -964,7 +975,7 @@ if(isset($_POST['update_status'])) {
                     <h3><i class="fas fa-history"></i> Enrollment History</h3>
                 </div>
 
-                <?php if($history && $history->num_rows > 0): ?>
+                <?php if(count($history) > 0): ?>
                     <div class="table-container">
                         <table class="history-table">
                             <thead>
@@ -977,7 +988,7 @@ if(isset($_POST['update_status'])) {
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($row = $history->fetch_assoc()): ?>
+                                <?php foreach($history as $row): ?>
                                     <tr>
                                         <td><?php echo htmlspecialchars($row['school_year']); ?></td>
                                         <td><?php echo htmlspecialchars($row['grade_name']); ?></td>
@@ -989,7 +1000,7 @@ if(isset($_POST['update_status'])) {
                                         </td>
                                         <td><?php echo date('M d, Y', strtotime($row['created_at'])); ?></td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1000,47 +1011,6 @@ if(isset($_POST['update_status'])) {
                     </div>
                 <?php endif; ?>
             </div>
-
-            <!-- Recent Attendance -->
-            <div class="detail-card">
-                <div class="card-header">
-                    <h3><i class="fas fa-calendar-check"></i> Recent Attendance</h3>
-                </div>
-
-                <?php if($attendance && $attendance->num_rows > 0): ?>
-                    <div class="table-container">
-                        <table class="attendance-table">
-                            <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Subject</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php while($row = $attendance->fetch_assoc()): ?>
-                                    <tr>
-                                        <td><?php echo date('M d, Y', strtotime($row['date'])); ?></td>
-                                        <td><?php echo htmlspecialchars($row['subject_name']); ?></td>
-                                        <td>
-                                            <span class="badge badge-<?php echo strtolower($row['status']); ?>">
-                                                <?php echo $row['status']; ?>
-                                            </span>
-                                        </td>
-                                    </tr>
-                                <?php endwhile; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php else: ?>
-                    <div class="no-data">
-                        <i class="fas fa-calendar-times"></i>
-                        <p>No attendance records found.</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-    </div>
 
     <script>
         // Auto-hide alerts after 5 seconds

@@ -31,16 +31,15 @@ $teacher_query = $conn->prepare("
     GROUP BY u.id
 ");
 
-$teacher_query->bind_param("i", $teacher_id);
-$teacher_query->execute();
-$teacher_result = $teacher_query->get_result();
+$teacher_query->execute([$teacher_id]);
+$teacher_result = $teacher_query->fetchAll(PDO::FETCH_ASSOC);
 
-if($teacher_result->num_rows === 0) {
+if(count($teacher_result) === 0) {
     header("Location: teachers.php");
     exit();
 }
 
-$teacher = $teacher_result->fetch_assoc();
+$teacher = $teacher_result[0];
 
 // Handle form submission
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -67,26 +66,20 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
     
     // Check if email already exists (excluding current teacher)
     $check_email = $conn->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
-    $check_email->bind_param("si", $email, $teacher_id);
-    $check_email->execute();
-    $check_email->store_result();
+    $check_email->execute([$email, $teacher_id]);
     
-    if($check_email->num_rows > 0) {
+    if($check_email->rowCount() > 0) {
         $errors[] = "Email address already registered to another user";
     }
-    $check_email->close();
     
     // Check if ID number already exists (if provided and excluding current teacher)
     if($id_number) {
         $check_id = $conn->prepare("SELECT id FROM users WHERE id_number = ? AND id != ?");
-        $check_id->bind_param("si", $id_number, $teacher_id);
-        $check_id->execute();
-        $check_id->store_result();
+        $check_id->execute([$id_number, $teacher_id]);
         
-        if($check_id->num_rows > 0) {
+        if($check_id->rowCount() > 0) {
             $errors[] = "ID number already exists for another user";
         }
-        $check_id->close();
     }
     
     // Password validation if changing
@@ -108,28 +101,25 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
     
     // If no errors, update the teacher
     if(empty($errors)) {
-        if($change_password) {
-            $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
-            $update_query = "UPDATE users SET id_number = ?, fullname = ?, email = ?, password = ? WHERE id = ?";
-            $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("ssssi", $id_number, $fullname, $email, $hashed_password, $teacher_id);
-        } else {
-            $update_query = "UPDATE users SET id_number = ?, fullname = ?, email = ? WHERE id = ?";
-            $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sssi", $id_number, $fullname, $email, $teacher_id);
-        }
-        
-        if($update_stmt->execute()) {
-            // Update teacher details in a separate table if you have one
-            // For now, we'll just show success message
+        try {
+            if($change_password) {
+                $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
+                $update_query = "UPDATE users SET id_number = ?, fullname = ?, email = ?, password = ? WHERE id = ?";
+                $update_stmt = $conn->prepare($update_query);
+                $update_stmt->execute([$id_number, $fullname, $email, $hashed_password, $teacher_id]);
+            } else {
+                $update_query = "UPDATE users SET id_number = ?, fullname = ?, email = ? WHERE id = ?";
+                $update_stmt = $conn->prepare($update_query);
+                $update_stmt->execute([$id_number, $fullname, $email, $teacher_id]);
+            }
             
             $_SESSION['success_message'] = "Teacher information updated successfully!";
             header("Location: teachers.php");
             exit();
-        } else {
-            $errors[] = "Database error: " . $conn->error;
+            
+        } catch(PDOException $e) {
+            $errors[] = "Database error: " . $e->getMessage();
         }
-        $update_stmt->close();
     }
     
     // If there are errors, store them

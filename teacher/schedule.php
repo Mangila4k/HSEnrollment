@@ -24,7 +24,7 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get teacher's assigned schedules from class_schedules table
+// Get teacher's assigned schedules from class_schedules table - FIXED for PDO
 $schedules_query = "
     SELECT 
         cs.*,
@@ -42,14 +42,14 @@ $schedules_query = "
     JOIN subjects sub ON cs.subject_id = sub.id
     JOIN days_of_week d ON cs.day_id = d.id
     JOIN time_slots ts ON cs.time_slot_id = ts.id
-    WHERE cs.teacher_id = ? AND cs.status = 'active'
+    WHERE cs.teacher_id = :teacher_id AND cs.status = 'active'
     ORDER BY d.day_order, ts.start_time
 ";
 
 $stmt = $conn->prepare($schedules_query);
-$stmt->bind_param("i", $teacher_id);
+$stmt->bindParam(':teacher_id', $teacher_id, PDO::PARAM_INT);
 $stmt->execute();
-$assigned_schedules = $stmt->get_result();
+$assigned_schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Organize schedules by day for easy display
 $weekly_schedule = [];
@@ -57,8 +57,8 @@ $total_hours = 0;
 $unique_sections = [];
 $unique_subjects = [];
 
-if($assigned_schedules && $assigned_schedules->num_rows > 0) {
-    while($class = $assigned_schedules->fetch_assoc()) {
+if(!empty($assigned_schedules)) {
+    foreach($assigned_schedules as $class) {
         $day = $class['day_name'];
         $time_slot_id = $class['time_slot_id'];
         
@@ -81,28 +81,28 @@ if($assigned_schedules && $assigned_schedules->num_rows > 0) {
         // Track unique subjects
         $unique_subjects[$class['subject_id']] = $class['subject_name'];
     }
-    $assigned_schedules->data_seek(0); // Reset pointer
 }
 
-// Get teacher's advisory sections
+// Get teacher's advisory sections - FIXED for PDO
 $advisory_query = "
     SELECT s.*, g.grade_name
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
-    WHERE s.adviser_id = ?
+    WHERE s.adviser_id = :teacher_id
     ORDER BY g.id, s.section_name
 ";
 $stmt = $conn->prepare($advisory_query);
-$stmt->bind_param("i", $teacher_id);
+$stmt->bindParam(':teacher_id', $teacher_id, PDO::PARAM_INT);
 $stmt->execute();
-$advisory_sections = $stmt->get_result();
+$advisory_sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Days of the week in order
 $days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
-// Time slots for the table header
+// Time slots for the table header - FIXED for PDO
 $time_slots_query = "SELECT * FROM time_slots ORDER BY start_time";
 $time_slots = $conn->query($time_slots_query);
+$time_slots_list = $time_slots ? $time_slots->fetchAll(PDO::FETCH_ASSOC) : [];
 
 // Get current week dates
 $today = new DateTime();
@@ -116,7 +116,7 @@ foreach($days_order as $day) {
 }
 
 // Calculate statistics
-$total_classes = $assigned_schedules ? $assigned_schedules->num_rows : 0;
+$total_classes = count($assigned_schedules);
 $total_sections = count($unique_sections);
 $total_subjects = count($unique_subjects);
 $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 periods x 5 days)
@@ -127,7 +127,7 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Placido L. Señor Senior High School</title>
+    <title>My Schedule - Teacher Dashboard | PNHS</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -301,56 +301,6 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
         .dashboard-header p {
             color: var(--text-secondary);
             font-size: 16px;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -822,12 +772,6 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
             }
@@ -873,7 +817,7 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance </span></a></li>
                     <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php" class="active"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -968,10 +912,10 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                     </span>
                 </div>
                 <div class="nav-buttons">
-                    <a href="#" class="nav-btn">
+                    <a href="#" class="nav-btn" onclick="changeWeek(-1)">
                         <i class="fas fa-chevron-left"></i> Previous Week
                     </a>
-                    <a href="#" class="nav-btn">
+                    <a href="#" class="nav-btn" onclick="changeWeek(1)">
                         Next Week <i class="fas fa-chevron-right"></i>
                     </a>
                 </div>
@@ -1003,8 +947,8 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if($time_slots && $time_slots->num_rows > 0): ?>
-                            <?php while($slot = $time_slots->fetch_assoc()): ?>
+                        <?php if(!empty($time_slots_list)): ?>
+                            <?php foreach($time_slots_list as $slot): ?>
                                 <tr>
                                     <td class="time-column">
                                         <?php echo date('h:i A', strtotime($slot['start_time'])); ?> - <br>
@@ -1045,7 +989,7 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                                         </td>
                                     <?php endforeach; ?>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
                                 <td colspan="6" style="text-align: center; padding: 50px;">
@@ -1064,7 +1008,7 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                         <div class="legend-color class"></div>
                         <span>Regular Class</span>
                     </div>
-                    <?php if($advisory_sections && $advisory_sections->num_rows > 0): ?>
+                    <?php if(!empty($advisory_sections)): ?>
                     <div class="legend-item">
                         <div class="legend-color advisory"></div>
                         <span>Advisory Class (You are the adviser)</span>
@@ -1119,15 +1063,15 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                 <div class="class-list-card">
                     <h4>
                         <i class="fas fa-star" style="color: #FFD700;"></i> Advisory Classes
-                        <span class="count-badge"><?php echo $advisory_sections ? $advisory_sections->num_rows : 0; ?></span>
+                        <span class="count-badge"><?php echo count($advisory_sections); ?></span>
                     </h4>
-                    <?php if($advisory_sections && $advisory_sections->num_rows > 0): ?>
-                        <?php while($section = $advisory_sections->fetch_assoc()): ?>
+                    <?php if(!empty($advisory_sections)): ?>
+                        <?php foreach($advisory_sections as $section): ?>
                             <span class="class-tag advisory">
                                 <i class="fas fa-users"></i>
                                 <?php echo htmlspecialchars($section['section_name'] . ' - ' . $section['grade_name']); ?>
                             </span>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     <?php else: ?>
                         <div class="no-data-message">
                             <i class="fas fa-info-circle"></i> No advisory classes
@@ -1149,6 +1093,12 @@ $free_periods = 40 - $total_classes; // Assuming 40 total periods in a week (8 p
                 }, 300);
             });
         }, 5000);
+        
+        // Week navigation function
+        function changeWeek(direction) {
+            // This would be implemented with actual date navigation
+            alert('Week navigation feature coming soon!');
+        }
     </script>
     <?php include('../includes/chatbot_widget_teacher.php'); ?>
 </body>

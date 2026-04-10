@@ -21,20 +21,17 @@ $subject_id = $_GET['id'];
 // Get subject details
 $query = "SELECT s.*, g.grade_name FROM subjects s LEFT JOIN grade_levels g ON s.grade_id = g.id WHERE s.id = ?";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$subject_id]);
+$subject = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$subject) {
     header("Location: subjects.php");
     exit();
 }
 
-$subject = $result->fetch_assoc();
-$stmt->close();
-
 // Get grade levels for dropdown
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Handle form submission
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -58,30 +55,25 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         if(empty($errors)) {
             $check_query = "SELECT id FROM subjects WHERE subject_name = ? AND grade_id = ? AND id != ?";
             $check_stmt = $conn->prepare($check_query);
-            $check_stmt->bind_param("sii", $subject_name, $grade_id, $subject_id);
-            $check_stmt->execute();
-            $check_result = $check_stmt->get_result();
+            $check_stmt->execute([$subject_name, $grade_id, $subject_id]);
             
-            if($check_result->num_rows > 0) {
+            if($check_stmt->rowCount() > 0) {
                 $errors[] = "Subject already exists for this grade level";
             }
-            $check_stmt->close();
         }
         
         // If no errors, update the subject
         if(empty($errors)) {
             $update_query = "UPDATE subjects SET subject_name = ?, grade_id = ? WHERE id = ?";
             $update_stmt = $conn->prepare($update_query);
-            $update_stmt->bind_param("sii", $subject_name, $grade_id, $subject_id);
             
-            if($update_stmt->execute()) {
+            if($update_stmt->execute([$subject_name, $grade_id, $subject_id])) {
                 $_SESSION['success_message'] = "Subject updated successfully!";
                 header("Location: view_subject.php?id=" . $subject_id);
                 exit();
             } else {
-                $errors[] = "Database error: " . $conn->error;
+                $errors[] = "Database error occurred";
             }
-            $update_stmt->close();
         }
         
         // If there are errors, store them
@@ -901,19 +893,12 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label>Grade Level <span>*</span></label>
                         <select name="grade_id" id="grade_id" required>
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            if($grade_levels) {
-                                $grade_levels->data_seek(0);
-                                while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" 
                                     <?php echo $grade['id'] == $subject['grade_id'] ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($grade['grade_name']); ?>
                                 </option>
-                            <?php 
-                                endwhile;
-                            } 
-                            ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
 
@@ -984,16 +969,9 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         // Store grade options for preview
         const gradeOptions = {};
-        <?php 
-        if($grade_levels) {
-            $grade_levels->data_seek(0);
-            while($grade = $grade_levels->fetch_assoc()): 
-        ?>
+        <?php foreach($grade_levels as $grade): ?>
             gradeOptions[<?php echo $grade['id']; ?>] = "<?php echo $grade['grade_name']; ?>";
-        <?php 
-            endwhile;
-        } 
-        ?>
+        <?php endforeach; ?>
 
         function updatePreview() {
             // Update subject name

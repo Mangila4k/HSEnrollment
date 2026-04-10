@@ -26,17 +26,13 @@ $query = "
     WHERE s.id = ?
 ";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$subject_id]);
+$subject = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$subject) {
     header("Location: subjects.php");
     exit();
 }
-
-$subject = $result->fetch_assoc();
-$stmt->close();
 
 // Get attendance records for this subject
 $attendance_query = "
@@ -48,11 +44,9 @@ $attendance_query = "
     LIMIT 20
 ";
 $stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$attendance = $stmt->get_result();
-$total_attendance = $attendance->num_rows;
-$stmt->close();
+$stmt->execute([$subject_id]);
+$attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$total_attendance = count($attendance);
 
 // Get attendance statistics
 $stats_query = "
@@ -65,10 +59,8 @@ $stats_query = "
     WHERE subject_id = ?
 ";
 $stmt = $conn->prepare($stats_query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$stats = $stmt->get_result()->fetch_assoc();
-$stmt->close();
+$stmt->execute([$subject_id]);
+$stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
 $attendance_rate = $stats['total'] > 0 
     ? round(($stats['present'] / $stats['total']) * 100, 2) 
@@ -84,11 +76,9 @@ $students_query = "
     LIMIT 10
 ";
 $stmt = $conn->prepare($students_query);
-$stmt->bind_param("i", $subject['grade_id']);
-$stmt->execute();
-$students = $stmt->get_result();
-$total_students = $students->num_rows;
-$stmt->close();
+$stmt->execute([$subject['grade_id']]);
+$students = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$total_students = count($students);
 
 // Get monthly attendance trend
 $monthly_query = "
@@ -103,10 +93,8 @@ $monthly_query = "
     LIMIT 6
 ";
 $stmt = $conn->prepare($monthly_query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$monthly_stats = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$subject_id]);
+$monthly_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get top performing students (based on attendance)
 $top_students_query = "
@@ -125,10 +113,8 @@ $top_students_query = "
     LIMIT 5
 ";
 $stmt = $conn->prepare($top_students_query);
-$stmt->bind_param("i", $subject_id);
-$stmt->execute();
-$top_students = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$subject_id]);
+$top_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -978,7 +964,7 @@ $stmt->close();
             </div>
 
             <!-- Attendance Trend Chart -->
-            <?php if($monthly_stats && $monthly_stats->num_rows > 0): ?>
+            <?php if(count($monthly_stats) > 0): ?>
             <div class="chart-card">
                 <div class="chart-header">
                     <h3><i class="fas fa-chart-line"></i> Attendance Trend</h3>
@@ -999,7 +985,7 @@ $stmt->close();
                     </a>
                 </div>
 
-                <?php if($attendance && $attendance->num_rows > 0): ?>
+                <?php if(count($attendance) > 0): ?>
                     <div class="table-container">
                         <table class="attendance-table">
                             <thead>
@@ -1012,7 +998,7 @@ $stmt->close();
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($record = $attendance->fetch_assoc()): ?>
+                                <?php foreach($attendance as $record): ?>
                                     <tr>
                                         <td><?php echo date('M d, Y', strtotime($record['date'])); ?></td>
                                         <td><?php echo htmlspecialchars($record['student_name']); ?></td>
@@ -1028,7 +1014,7 @@ $stmt->close();
                                             </a>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1041,7 +1027,7 @@ $stmt->close();
             </div>
 
             <!-- Top Performing Students -->
-            <?php if($top_students && $top_students->num_rows > 0): ?>
+            <?php if(count($top_students) > 0): ?>
             <div class="detail-card">
                 <div class="card-header">
                     <h3><i class="fas fa-trophy"></i> Top Performing Students</h3>
@@ -1051,7 +1037,7 @@ $stmt->close();
                 <div class="top-students-list">
                     <?php 
                     $rank = 1;
-                    while($student = $top_students->fetch_assoc()): 
+                    foreach($top_students as $student): 
                     ?>
                         <div class="top-student-item">
                             <div class="student-rank"><?php echo $rank++; ?></div>
@@ -1061,7 +1047,7 @@ $stmt->close();
                             </div>
                             <div class="student-rate"><?php echo $student['attendance_rate']; ?>%</div>
                         </div>
-                    <?php endwhile; ?>
+                    <?php endforeach; ?>
                 </div>
             </div>
             <?php endif; ?>
@@ -1075,7 +1061,7 @@ $stmt->close();
                     </a>
                 </div>
 
-                <?php if($students && $students->num_rows > 0): ?>
+                <?php if(count($students) > 0): ?>
                     <div class="table-container">
                         <table class="students-table">
                             <thead>
@@ -1088,7 +1074,7 @@ $stmt->close();
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($student = $students->fetch_assoc()): ?>
+                                <?php foreach($students as $student): ?>
                                     <tr>
                                         <td>
                                             <div class="student-avatar">
@@ -1112,7 +1098,7 @@ $stmt->close();
                                             </a>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
@@ -1128,30 +1114,29 @@ $stmt->close();
 
     <script>
         // Attendance Trend Chart
-        <?php if($monthly_stats && $monthly_stats->num_rows > 0): ?>
+        <?php if(count($monthly_stats) > 0): ?>
         const ctx = document.getElementById('attendanceChart').getContext('2d');
         
         <?php
-        $months = [];
-        $present_data = [];
-        $total_data = [];
+        // Process monthly stats in reverse order for chronological display
+        $months_reversed = array_reverse(array_column($monthly_stats, 'month'));
+        $present_data_reversed = array_reverse(array_column($monthly_stats, 'present'));
+        $total_data_reversed = array_reverse(array_column($monthly_stats, 'total'));
         
-        $monthly_stats->data_seek(0);
-        while($row = $monthly_stats->fetch_assoc()) {
-            $months[] = date('M Y', strtotime($row['month'] . '-01'));
-            $present_data[] = $row['present'];
-            $total_data[] = $row['total'];
+        $months = [];
+        foreach($months_reversed as $month) {
+            $months[] = date('M Y', strtotime($month . '-01'));
         }
         ?>
         
         new Chart(ctx, {
             type: 'line',
             data: {
-                labels: <?php echo json_encode(array_reverse($months)); ?>,
+                labels: <?php echo json_encode($months); ?>,
                 datasets: [
                     {
                         label: 'Present',
-                        data: <?php echo json_encode(array_reverse($present_data)); ?>,
+                        data: <?php echo json_encode($present_data_reversed); ?>,
                         borderColor: '#28a745',
                         backgroundColor: 'rgba(40, 167, 69, 0.1)',
                         tension: 0.4,
@@ -1159,7 +1144,7 @@ $stmt->close();
                     },
                     {
                         label: 'Total Attendance',
-                        data: <?php echo json_encode(array_reverse($total_data)); ?>,
+                        data: <?php echo json_encode($total_data_reversed); ?>,
                         borderColor: '#0B4F2E',
                         backgroundColor: 'rgba(11, 79, 46, 0.1)',
                         tension: 0.4,

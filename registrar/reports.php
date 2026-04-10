@@ -31,7 +31,8 @@ $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$stmt = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Initialize report data
 $report_data = null;
@@ -53,13 +54,19 @@ if($report_type == 'enrollment_summary') {
             SUM(CASE WHEN e.status = 'Rejected' THEN 1 ELSE 0 END) as rejected
         FROM grade_levels g
         LEFT JOIN enrollments e ON g.id = e.grade_id
-            AND e.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'
+            AND e.created_at BETWEEN :date_from AND :date_to
         GROUP BY g.id
         ORDER BY g.id
     ";
     
-    $result = $conn->query($query);
-    while($row = $result->fetch_assoc()) {
+    $stmt = $conn->prepare($query);
+    $stmt->execute([
+        ':date_from' => $date_from . ' 00:00:00',
+        ':date_to' => $date_to . ' 23:59:59'
+    ]);
+    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach($results as $row) {
         $enrollment_rate = $row['total'] > 0 ? round(($row['enrolled'] / $row['total']) * 100, 2) : 0;
         $report_rows[] = [
             $row['grade_name'],
@@ -90,18 +97,25 @@ elseif($report_type == 'student_list') {
         WHERE u.role = 'Student'
     ";
     
+    $params = [];
+    
     if(!empty($grade_filter)) {
-        $query .= " AND e.grade_id = '$grade_filter'";
+        $query .= " AND e.grade_id = :grade";
+        $params[':grade'] = $grade_filter;
     }
     
     if(!empty($status_filter)) {
-        $query .= " AND e.status = '$status_filter'";
+        $query .= " AND e.status = :status";
+        $params[':status'] = $status_filter;
     }
     
     $query .= " ORDER BY u.fullname";
     
-    $result = $conn->query($query);
-    while($row = $result->fetch_assoc()) {
+    $stmt = $conn->prepare($query);
+    $stmt->execute($params);
+    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach($results as $row) {
         $report_rows[] = [
             $row['fullname'],
             $row['id_number'] ?? 'N/A',
@@ -125,14 +139,20 @@ elseif($report_type == 'enrollment_trends') {
             SUM(CASE WHEN status = 'Enrolled' THEN 1 ELSE 0 END) as enrolled,
             SUM(CASE WHEN status = 'Rejected' THEN 1 ELSE 0 END) as rejected
         FROM enrollments
-        WHERE created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'
+        WHERE created_at BETWEEN :date_from AND :date_to
         GROUP BY DATE_FORMAT(created_at, '%Y-%m')
         ORDER BY month DESC
     ";
     
-    $result = $conn->query($query);
+    $stmt = $conn->prepare($query);
+    $stmt->execute([
+        ':date_from' => $date_from . ' 00:00:00',
+        ':date_to' => $date_to . ' 23:59:59'
+    ]);
+    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
     $prev_total = 0;
-    while($row = $result->fetch_assoc()) {
+    foreach($results as $row) {
         $change = $prev_total > 0 ? round((($row['total'] - $prev_total) / $prev_total) * 100, 2) : 0;
         $change_text = $change > 0 ? "+$change%" : ($change < 0 ? "$change%" : "0%");
         $report_rows[] = [
@@ -156,20 +176,24 @@ elseif($report_type == 'strand_distribution') {
             COUNT(DISTINCT e.student_id) as student_count
         FROM enrollments e
         WHERE e.grade_id IN (5, 6) AND e.status = 'Enrolled'
-            AND e.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'
+            AND e.created_at BETWEEN :date_from AND :date_to
         GROUP BY e.strand
         ORDER BY student_count DESC
     ";
     
-    $result = $conn->query($query);
+    $stmt = $conn->prepare($query);
+    $stmt->execute([
+        ':date_from' => $date_from . ' 00:00:00',
+        ':date_to' => $date_to . ' 23:59:59'
+    ]);
+    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
     $total = 0;
-    $rows = [];
-    while($row = $result->fetch_assoc()) {
+    foreach($results as $row) {
         $total += $row['student_count'];
-        $rows[] = $row;
     }
     
-    foreach($rows as $row) {
+    foreach($results as $row) {
         $percentage = $total > 0 ? round(($row['student_count'] / $total) * 100, 2) : 0;
         $report_rows[] = [
             $row['strand'],
@@ -180,10 +204,17 @@ elseif($report_type == 'strand_distribution') {
 }
 
 // Get summary statistics for dashboard
-$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'")->fetch_assoc()['count'];
-$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments")->fetch_assoc()['count'];
-$enrolled_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'")->fetch_assoc()['count'];
-$this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE())")->fetch_assoc()['count'];
+$stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE role='Student'");
+$total_students = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments");
+$total_enrollments = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status='Enrolled'");
+$enrolled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE MONTH(created_at) = MONTH(CURRENT_DATE()) AND YEAR(created_at) = YEAR(CURRENT_DATE())");
+$this_month_enrollments = $stmt->fetch(PDO::FETCH_ASSOC)['count'];
 ?>
 
 <!DOCTYPE html>
@@ -196,8 +227,6 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Chart.js -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * {
             margin: 0;
@@ -367,94 +396,6 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
         .dashboard-header p {
             color: var(--text-secondary);
             font-size: 16px;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Alert Messages */
-        .alert {
-            padding: 15px 20px;
-            border-radius: 12px;
-            margin-bottom: 25px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            animation: slideIn 0.3s ease;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border-left: 4px solid #28a745;
-        }
-
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid #dc3545;
-        }
-
-        .alert i {
-            font-size: 20px;
         }
 
         /* Stats Cards */
@@ -826,12 +767,6 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
             }
@@ -875,6 +810,7 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php" class="active"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -971,18 +907,11 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
                         <label>Grade Level</label>
                         <select name="grade">
                             <option value="">All Grades</option>
-                            <?php 
-                            if($grade_levels) {
-                                $grade_levels->data_seek(0);
-                                while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
                                     <?php echo $grade['grade_name']; ?>
                                 </option>
-                            <?php 
-                                endwhile;
-                            } 
-                            ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
 
@@ -998,7 +927,7 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
 
                     <div class="control-group" style="display: flex; gap: 10px;">
                         <button type="submit" class="btn-generate">
-                            <i class="fas fa-sync-alt"></i> Generate
+                            <i class="fas fa-sync-alt"></i> Apply
                         </button>
                         <a href="reports.php" class="btn-reset">
                             <i class="fas fa-redo-alt"></i> Reset
@@ -1068,17 +997,6 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
     </div>
 
     <script>
-        // Auto-hide alerts after 5 seconds
-        setTimeout(function() {
-            const alerts = document.querySelectorAll('.alert');
-            alerts.forEach(alert => {
-                alert.style.opacity = '0';
-                setTimeout(() => {
-                    alert.style.display = 'none';
-                }, 300);
-            });
-        }, 5000);
-
         // Export to Excel function
         function exportToExcel() {
             const table = document.getElementById('reportTable');
@@ -1088,7 +1006,6 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
             rows.forEach(row => {
                 const cols = Array.from(row.querySelectorAll('th, td'));
                 const rowData = cols.map(col => {
-                    // Get text content, remove extra spaces and commas
                     return '"' + col.innerText.replace(/"/g, '""').replace(/\s+/g, ' ').trim() + '"';
                 }).join(',');
                 csv.push(rowData);
@@ -1146,8 +1063,5 @@ $this_month_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollment
             newWindow.print();
         }
     </script>
-    <li><a href="sections.php" class="<?php echo basename($_SERVER['PHP_SELF']) == 'sections.php' ? 'active' : ''; ?>">
-    <i class="fas fa-layer-group"></i><span>Sections</span>
-</a></li>
 </body>
 </html>

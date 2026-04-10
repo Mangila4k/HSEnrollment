@@ -18,70 +18,99 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $teacher_id = $_GET['id'];
 
-// Get teacher details
+// Get teacher details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Teacher'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$teacher_id]);
+$teacher = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$teacher) {
     header("Location: teachers.php");
     exit();
 }
 
-$teacher = $result->fetch_assoc();
-$stmt->close();
-
 // Get teacher's advisory sections
 $sections_query = "
     SELECT s.*, g.grade_name,
-           (SELECT COUNT(*) FROM enrollments e WHERE e.grade_id = s.grade_id AND e.status = 'Enrolled') as student_count
+           (SELECT COUNT(*) FROM enrollments e WHERE e.section_id = s.id AND e.status = 'Enrolled') as student_count
     FROM sections s
     LEFT JOIN grade_levels g ON s.grade_id = g.id
     WHERE s.adviser_id = ?
     ORDER BY g.id, s.section_name
 ";
 $stmt = $conn->prepare($sections_query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$sections = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$teacher_id]);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get subjects taught by teacher (if you have a teacher_subjects table)
-// For now, we'll show all subjects as placeholder
+// Get subjects taught by teacher (from class_schedules)
 $subjects_query = "
-    SELECT sub.*, g.grade_name
+    SELECT DISTINCT sub.*, g.grade_name
     FROM subjects sub
     LEFT JOIN grade_levels g ON sub.grade_id = g.id
+    INNER JOIN class_schedules cs ON cs.subject_id = sub.id
+    WHERE cs.teacher_id = ?
     ORDER BY g.id, sub.subject_name
-    LIMIT 10
 ";
-$subjects = $conn->query($subjects_query);
+$stmt = $conn->prepare($subjects_query);
+$stmt->execute([$teacher_id]);
+$subjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get recent activities (attendance records from teacher's sections)
+// Get recent activities (attendance records from teacher's subjects)
 $activities_query = "
     SELECT a.*, u.fullname as student_name, sub.subject_name
     FROM attendance a
     LEFT JOIN users u ON a.student_id = u.id
     LEFT JOIN subjects sub ON a.subject_id = sub.id
-    WHERE sub.id IN (SELECT id FROM subjects)
+    WHERE sub.id IN (SELECT DISTINCT cs.subject_id FROM class_schedules cs WHERE cs.teacher_id = ?)
     ORDER BY a.date DESC
     LIMIT 10
 ";
-$activities = $conn->query($activities_query);
+$stmt = $conn->prepare($activities_query);
+$stmt->execute([$teacher_id]);
+$activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Calculate statistics
-$total_sections = $sections->num_rows;
+$total_sections = count($sections);
 $total_students = 0;
-$sections->data_seek(0);
-while($section = $sections->fetch_assoc()) {
+foreach($sections as $section) {
     $total_students += $section['student_count'];
 }
-$sections->data_seek(0);
 
 $account_created = $teacher['created_at'];
 $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
+
+// Handle delete request
+if(isset($_GET['delete']) && $_GET['delete'] == $teacher_id) {
+    try {
+        // Start transaction
+        $conn->beginTransaction();
+        
+        // First, remove teacher as adviser from sections (set adviser_id to NULL)
+        $update_sections = "UPDATE sections SET adviser_id = NULL WHERE adviser_id = ?";
+        $stmt = $conn->prepare($update_sections);
+        $stmt->execute([$teacher_id]);
+        
+        // Delete class schedules for this teacher
+        $delete_schedules = "DELETE FROM class_schedules WHERE teacher_id = ?";
+        $stmt = $conn->prepare($delete_schedules);
+        $stmt->execute([$teacher_id]);
+        
+        // Delete the teacher
+        $delete_teacher = "DELETE FROM users WHERE id = ? AND role = 'Teacher'";
+        $stmt = $conn->prepare($delete_teacher);
+        $stmt->execute([$teacher_id]);
+        
+        $conn->commit();
+        $_SESSION['success_message'] = "Teacher deleted successfully!";
+        header("Location: teachers.php");
+        exit();
+    } catch(Exception $e) {
+        $conn->rollBack();
+        $_SESSION['error_message'] = "Error deleting teacher: " . $e->getMessage();
+        header("Location: view_teacher.php?id=" . $teacher_id);
+        exit();
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -933,6 +962,13 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                 </div>
             <?php endif; ?>
 
+            <?php if(isset($_SESSION['error_message'])): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <?php echo $_SESSION['error_message']; unset($_SESSION['error_message']); ?>
+                </div>
+            <?php endif; ?>
+
             <!-- Teacher Profile Card -->
             <div class="profile-card">
                 <div class="profile-avatar-large">
@@ -1000,8 +1036,8 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                         <i class="fas fa-book"></i>
                     </div>
                     <div class="stat-content">
-                        <div class="stat-number"><?php echo $subjects->num_rows; ?></div>
-                        <div class="stat-label">Subjects Available</div>
+                        <div class="stat-number"><?php echo count($subjects); ?></div>
+                        <div class="stat-label">Subjects Taught</div>
                     </div>
                 </div>
             </div>
@@ -1015,9 +1051,9 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                     </a>
                 </div>
 
-                <?php if($sections && $sections->num_rows > 0): ?>
+                <?php if(!empty($sections)): ?>
                     <div class="sections-grid">
-                        <?php while($section = $sections->fetch_assoc()): ?>
+                        <?php foreach($sections as $section): ?>
                             <div class="section-card">
                                 <h4>
                                     <i class="fas fa-users"></i>
@@ -1036,7 +1072,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                                     View Section <i class="fas fa-arrow-right"></i>
                                 </a>
                             </div>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     </div>
                 <?php else: ?>
                     <div class="no-data">
@@ -1050,23 +1086,23 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
             <!-- Subjects -->
             <div class="detail-card">
                 <div class="card-header">
-                    <h3><i class="fas fa-book"></i> Subjects</h3>
+                    <h3><i class="fas fa-book"></i> Subjects Taught</h3>
                 </div>
 
-                <?php if($subjects && $subjects->num_rows > 0): ?>
+                <?php if(!empty($subjects)): ?>
                     <div class="subjects-list">
-                        <?php while($subject = $subjects->fetch_assoc()): ?>
+                        <?php foreach($subjects as $subject): ?>
                             <span class="subject-tag">
                                 <i class="fas fa-book-open"></i>
                                 <?php echo htmlspecialchars($subject['subject_name']); ?>
                                 <span style="color: var(--text-secondary); font-size: 11px;">(<?php echo $subject['grade_name']; ?>)</span>
                             </span>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     </div>
                 <?php else: ?>
                     <div class="no-data" style="padding: 20px;">
                         <i class="fas fa-book"></i>
-                        <p>No subjects available.</p>
+                        <p>No subjects assigned to this teacher.</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -1077,7 +1113,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                     <h3><i class="fas fa-history"></i> Recent Attendance Activities</h3>
                 </div>
 
-                <?php if($activities && $activities->num_rows > 0): ?>
+                <?php if(!empty($activities)): ?>
                     <div class="table-container">
                         <table class="activities-table">
                             <thead>
@@ -1091,7 +1127,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                             <tbody>
                                 <?php 
                                 $count = 0;
-                                while($row = $activities->fetch_assoc()): 
+                                foreach($activities as $row): 
                                     if($count++ >= 5) break;
                                 ?>
                                     <tr>
@@ -1104,7 +1140,7 @@ $days_active = floor((time() - strtotime($account_created)) / (60 * 60 * 24));
                                             </span>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>

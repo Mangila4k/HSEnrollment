@@ -1,6 +1,6 @@
 <?php
 session_start();
-include("../config/database.php");
+require_once("../config/database.php");
 
 // Check if user is admin
 if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
@@ -23,147 +23,170 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Handle delete action for student attendance
-if(isset($_GET['delete'])) {
-    $delete_id = $_GET['delete'];
-    $delete = $conn->query("DELETE FROM attendance WHERE id = '$delete_id'");
-    if($delete) {
-        $success_message = "Attendance record deleted successfully!";
-    } else {
-        $error_message = "Error deleting attendance record.";
-    }
-}
-
 // Handle delete action for teacher attendance
 if(isset($_GET['delete_teacher'])) {
     $delete_id = $_GET['delete_teacher'];
-    $delete = $conn->query("DELETE FROM teacher_attendance WHERE id = '$delete_id'");
-    if($delete) {
+    $delete = $conn->prepare("DELETE FROM teacher_attendance WHERE id = ?");
+    $delete->execute([$delete_id]);
+    if($delete->rowCount() > 0) {
         $success_message = "Teacher attendance record deleted successfully!";
     } else {
         $error_message = "Error deleting teacher attendance record.";
     }
 }
 
-// Get filter parameters for student attendance
-$date_filter = isset($_GET['date']) ? $_GET['date'] : date('Y-m-d');
-$grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
-$section_filter = isset($_GET['section']) ? $_GET['section'] : '';
-$subject_filter = isset($_GET['subject']) ? $_GET['subject'] : '';
-$status_filter = isset($_GET['status']) ? $_GET['status'] : '';
+// Handle edit action
+if(isset($_POST['edit_teacher_attendance'])) {
+    $id = $_POST['id'];
+    $teacher_id = $_POST['teacher_id'];
+    $date = $_POST['date'];
+    $time_in = $_POST['time_in'] ?: null;
+    $time_out = $_POST['time_out'] ?: null;
+    $status = $_POST['status'];
+    $remarks = $_POST['remarks'];
+    
+    $update = $conn->prepare("
+        UPDATE teacher_attendance 
+        SET teacher_id = ?, date = ?, time_in = ?, time_out = ?, status = ?, remarks = ?
+        WHERE id = ?
+    ");
+    if($update->execute([$teacher_id, $date, $time_in, $time_out, $status, $remarks, $id])) {
+        $_SESSION['success_message'] = "Teacher attendance record updated successfully!";
+    } else {
+        $_SESSION['error_message'] = "Error updating teacher attendance record.";
+    }
+    header("Location: attendance.php");
+    exit();
+}
+
+// Handle add action
+if(isset($_POST['add_teacher_attendance'])) {
+    $teacher_id = $_POST['teacher_id'];
+    $date = $_POST['date'];
+    $time_in = $_POST['time_in'] ?: null;
+    $time_out = $_POST['time_out'] ?: null;
+    $status = $_POST['status'];
+    $remarks = $_POST['remarks'];
+    
+    // Check if record already exists for this teacher on this date
+    $check = $conn->prepare("SELECT id FROM teacher_attendance WHERE teacher_id = ? AND date = ?");
+    $check->execute([$teacher_id, $date]);
+    if($check->rowCount() > 0) {
+        $_SESSION['error_message'] = "Attendance record already exists for this teacher on this date.";
+    } else {
+        $insert = $conn->prepare("
+            INSERT INTO teacher_attendance (teacher_id, date, time_in, time_out, status, remarks, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, NOW())
+        ");
+        if($insert->execute([$teacher_id, $date, $time_in, $time_out, $status, $remarks])) {
+            $_SESSION['success_message'] = "Teacher attendance record added successfully!";
+        } else {
+            $_SESSION['error_message'] = "Error adding teacher attendance record.";
+        }
+    }
+    header("Location: attendance.php");
+    exit();
+}
 
 // Get filter parameters for teacher attendance
-$teacher_date_filter = isset($_GET['teacher_date']) ? $_GET['teacher_date'] : date('Y-m-d');
+$teacher_date_filter = isset($_GET['teacher_date']) ? $_GET['teacher_date'] : '';
 $teacher_status_filter = isset($_GET['teacher_status']) ? $_GET['teacher_status'] : '';
-$teacher_department_filter = isset($_GET['department']) ? $_GET['department'] : '';
+$teacher_filter = isset($_GET['teacher']) ? $_GET['teacher'] : '';
 
-// Build the student attendance query
-$query = "
-    SELECT a.*, 
-           u.fullname as student_name,
-           u.id_number as student_id_number,
-           sub.subject_name,
-           g.grade_name,
-           s.section_name
-    FROM attendance a
-    JOIN users u ON a.student_id = u.id
-    JOIN subjects sub ON a.subject_id = sub.id
-    JOIN grade_levels g ON sub.grade_id = g.id
-    LEFT JOIN sections s ON u.id = s.adviser_id
-    WHERE 1=1
-";
-
-if(!empty($date_filter)) {
-    $query .= " AND a.date = '$date_filter'";
-}
-
-if(!empty($grade_filter)) {
-    $query .= " AND sub.grade_id = '$grade_filter'";
-}
-
-if(!empty($subject_filter)) {
-    $query .= " AND a.subject_id = '$subject_filter'";
-}
-
-if(!empty($status_filter)) {
-    $query .= " AND a.status = '$status_filter'";
-}
-
-$query .= " ORDER BY a.date DESC, a.created_at DESC";
-
-$attendance_records = $conn->query($query);
-
-// Build the teacher attendance query
+// Build the teacher attendance query - FIXED: Properly handle the date filter
 $teacher_query = "
     SELECT ta.*, 
            u.fullname as teacher_name,
            u.id_number as teacher_id_number,
-           u.email as teacher_email
+           u.email as teacher_email,
+           u.firstname,
+           u.lastname
     FROM teacher_attendance ta
-    JOIN users u ON ta.teacher_id = u.id
+    INNER JOIN users u ON ta.teacher_id = u.id
     WHERE u.role = 'Teacher'
 ";
+$teacher_params = [];
 
-if(!empty($teacher_date_filter)) {
-    $teacher_query .= " AND ta.date = '$teacher_date_filter'";
+// Only add date filter if a specific date is selected and it's not 'all'
+if(!empty($teacher_date_filter) && $teacher_date_filter != 'all') {
+    $teacher_query .= " AND ta.date = ?";
+    $teacher_params[] = $teacher_date_filter;
 }
 
 if(!empty($teacher_status_filter)) {
-    $teacher_query .= " AND ta.status = '$teacher_status_filter'";
+    $teacher_query .= " AND ta.status = ?";
+    $teacher_params[] = $teacher_status_filter;
+}
+
+if(!empty($teacher_filter)) {
+    $teacher_query .= " AND ta.teacher_id = ?";
+    $teacher_params[] = $teacher_filter;
 }
 
 $teacher_query .= " ORDER BY ta.date DESC, ta.created_at DESC";
 
-$teacher_attendance_records = $conn->query($teacher_query);
+$teacher_stmt = $conn->prepare($teacher_query);
+$teacher_stmt->execute($teacher_params);
+$teacher_attendance_records = $teacher_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get student attendance statistics
-$today = date('Y-m-d');
-$total_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today'")->fetch_assoc()['count'];
-$present_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Present'")->fetch_assoc()['count'];
-$absent_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Absent'")->fetch_assoc()['count'];
-$late_today = $conn->query("SELECT COUNT(*) as count FROM attendance WHERE date = '$today' AND status = 'Late'")->fetch_assoc()['count'];
+// Debug: Check if records are found
+$record_count = count($teacher_attendance_records);
 
-// Get teacher attendance statistics
-$teacher_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today'")->fetch_assoc()['count'] ?? 0;
-$teacher_present_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Present'")->fetch_assoc()['count'] ?? 0;
-$teacher_absent_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Absent'")->fetch_assoc()['count'] ?? 0;
-$teacher_late_today = $conn->query("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = '$today' AND status = 'Late'")->fetch_assoc()['count'] ?? 0;
-
-// Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
-
-// Get subjects for filter
-$subjects = $conn->query("SELECT * FROM subjects ORDER BY subject_name");
-
-// Get sections for filter
-$sections = $conn->query("SELECT s.*, g.grade_name FROM sections s JOIN grade_levels g ON s.grade_id = g.id ORDER BY g.id, s.section_name");
-
-// Get teachers for filter
-$teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
-
-// Check if teacher_attendance table exists, if not create it
-$table_check = $conn->query("SHOW TABLES LIKE 'teacher_attendance'");
-if($table_check->num_rows == 0) {
-    $create_table = "
-        CREATE TABLE IF NOT EXISTS `teacher_attendance` (
-            `id` int(11) NOT NULL AUTO_INCREMENT,
-            `teacher_id` int(11) NOT NULL,
-            `date` date NOT NULL,
-            `time_in` time DEFAULT NULL,
-            `time_out` time DEFAULT NULL,
-            `status` enum('Present','Absent','Late') NOT NULL,
-            `remarks` text DEFAULT NULL,
-            `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
-            PRIMARY KEY (`id`),
-            KEY `teacher_id` (`teacher_id`),
-            CONSTRAINT `teacher_attendance_ibfk_1` FOREIGN KEY (`teacher_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-    ";
-    $conn->query($create_table);
+// If no records found with filters, try to get all records for debugging
+if($record_count == 0 && empty($teacher_date_filter) && empty($teacher_status_filter) && empty($teacher_filter)) {
+    // Try a simpler query to check if there are any records at all
+    $check_stmt = $conn->query("SELECT COUNT(*) as total FROM teacher_attendance");
+    $total_records = $check_stmt->fetch(PDO::FETCH_ASSOC)['total'];
+    
+    if($total_records > 0) {
+        // There are records but the join might be failing
+        $simple_stmt = $conn->query("SELECT * FROM teacher_attendance LIMIT 5");
+        $sample_records = $simple_stmt->fetchAll(PDO::FETCH_ASSOC);
+        // For debugging - you can remove this after fixing
+        error_log("Total teacher_attendance records: " . $total_records);
+        error_log("Sample record: " . print_r($sample_records[0] ?? [], true));
+    }
 }
 
-// Get active tab
-$active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
+// Get teacher attendance statistics for today
+$today = date('Y-m-d');
+
+$teacher_today_stmt = $conn->prepare("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = ?");
+$teacher_today_stmt->execute([$today]);
+$teacher_today = $teacher_today_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$teacher_present_today_stmt = $conn->prepare("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = ? AND status = 'Present'");
+$teacher_present_today_stmt->execute([$today]);
+$teacher_present_today = $teacher_present_today_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$teacher_absent_today_stmt = $conn->prepare("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = ? AND status = 'Absent'");
+$teacher_absent_today_stmt->execute([$today]);
+$teacher_absent_today = $teacher_absent_today_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+$teacher_late_today_stmt = $conn->prepare("SELECT COUNT(*) as count FROM teacher_attendance WHERE date = ? AND status = 'Late'");
+$teacher_late_today_stmt->execute([$today]);
+$teacher_late_today = $teacher_late_today_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// Get overall statistics
+$overall_stats = $conn->prepare("
+    SELECT 
+        COUNT(*) as total_records,
+        COUNT(DISTINCT teacher_id) as total_teachers,
+        MIN(date) as earliest_date,
+        MAX(date) as latest_date
+    FROM teacher_attendance
+");
+$overall_stats->execute();
+$overall = $overall_stats->fetch(PDO::FETCH_ASSOC);
+
+// Get teachers for filter (only approved teachers)
+$teachers_stmt = $conn->prepare("SELECT id, fullname, id_number FROM users WHERE role = 'Teacher' AND status = 'approved' ORDER BY fullname");
+$teachers_stmt->execute();
+$teachers = $teachers_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get all distinct dates for the date filter dropdown
+$dates_stmt = $conn->query("SELECT DISTINCT date FROM teacher_attendance ORDER BY date DESC LIMIT 30");
+$available_dates = $dates_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -171,7 +194,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Attendance Management - Admin Dashboard</title>
+    <title>Teacher Attendance Management - Admin Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -195,6 +218,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             --success: #28a745;
             --warning: #ffc107;
             --danger: #dc3545;
+            --info: #17a2b8;
         }
 
         body {
@@ -203,13 +227,11 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             min-height: 100vh;
         }
 
-        /* Main Layout */
         .app-container {
             display: flex;
             min-height: 100vh;
         }
 
-        /* Sidebar */
         .sidebar {
             width: 280px;
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
@@ -322,14 +344,12 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             border-left: 3px solid var(--accent);
         }
 
-        /* Main Content */
         .main-content {
             flex: 1;
             margin-left: 280px;
             padding: 30px;
         }
 
-        /* Header */
         .dashboard-header {
             margin-bottom: 30px;
         }
@@ -346,57 +366,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             font-size: 16px;
         }
 
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: var(--accent);
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
-        }
-
-        /* Alert Messages */
         .alert {
             padding: 15px 20px;
             border-radius: 12px;
@@ -434,49 +403,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             font-size: 20px;
         }
 
-        /* Tab Navigation */
-        .tab-nav {
-            background: white;
-            border-radius: 15px;
-            padding: 5px;
-            margin-bottom: 30px;
-            display: flex;
-            gap: 10px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-        }
-
-        .tab-btn {
-            flex: 1;
-            padding: 15px 25px;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            background: transparent;
-            color: var(--text-secondary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .tab-btn i {
-            font-size: 18px;
-        }
-
-        .tab-btn.active {
-            background: var(--primary);
-            color: white;
-        }
-
-        .tab-btn:hover:not(.active) {
-            background: var(--hover-color);
-            color: var(--primary);
-        }
-
-        /* Stats Cards */
         .stats-container {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -550,7 +476,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             font-size: 14px;
         }
 
-        /* Date Navigation */
         .date-nav {
             background: white;
             border-radius: 15px;
@@ -568,6 +493,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             display: flex;
             align-items: center;
             gap: 15px;
+            flex-wrap: wrap;
         }
 
         .date-display h3 {
@@ -580,6 +506,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
         }
 
         .date-input {
@@ -614,7 +541,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             background: var(--primary-dark);
         }
 
-        /* Filters Bar */
         .filters-bar {
             background: white;
             border-radius: 15px;
@@ -724,7 +650,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
         }
 
-        /* Table Card */
         .table-card {
             background: white;
             border-radius: 20px;
@@ -841,6 +766,26 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             background: rgba(255, 193, 7, 0.1);
             color: var(--warning);
         }
+        
+        .badge-pending {
+            background: rgba(23, 162, 184, 0.1);
+            color: var(--info);
+        }
+        
+        .badge-active {
+            background: rgba(40, 167, 69, 0.1);
+            color: var(--success);
+        }
+        
+        .badge-used {
+            background: rgba(255, 193, 7, 0.1);
+            color: var(--warning);
+        }
+        
+        .badge-expired, .badge-completed {
+            background: rgba(108, 117, 125, 0.1);
+            color: #6c757d;
+        }
 
         .grade-tag {
             background: rgba(11, 79, 46, 0.1);
@@ -850,17 +795,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             font-size: 11px;
             font-weight: 500;
             display: inline-block;
-        }
-
-        .subject-tag {
-            background: rgba(76, 201, 240, 0.1);
-            color: #4cc9f0;
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 500;
-            display: inline-block;
-            margin-left: 5px;
         }
 
         .time-tag {
@@ -926,7 +860,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             margin-bottom: 10px;
         }
 
-        /* Modal */
         .modal {
             display: none;
             position: fixed;
@@ -1032,7 +965,6 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             cursor: pointer;
         }
 
-        /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
                 grid-template-columns: repeat(2, 1fr);
@@ -1075,18 +1007,8 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
-            }
-            
-            .tab-nav {
-                flex-direction: column;
             }
             
             .date-nav {
@@ -1120,13 +1042,7 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
 </head>
 <body>
     <div class="app-container">
-        <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
             <div class="admin-info">
                 <div class="admin-avatar">
                     <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
@@ -1164,15 +1080,12 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
             </div>
         </div>
 
-        <!-- Main Content -->
         <div class="main-content">
-            <!-- Header -->
             <div class="dashboard-header">
-                <h1>Attendance Management</h1>
-                <p>View and manage student and teacher attendance records</p>
+                <h1>Teacher Attendance Management</h1>
+                <p>View and manage teacher attendance records</p>
             </div>
 
-            <!-- Alert Messages -->
             <?php if($success_message): ?>
                 <div class="alert alert-success">
                     <i class="fas fa-check-circle"></i>
@@ -1187,443 +1100,237 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                 </div>
             <?php endif; ?>
 
-            <!-- Tab Navigation -->
-            <div class="tab-nav">
-                <a href="?tab=students" class="tab-btn <?php echo $active_tab == 'students' ? 'active' : ''; ?>">
-                    <i class="fas fa-user-graduate"></i> Student Attendance
-                </a>
-                <a href="?tab=teachers" class="tab-btn <?php echo $active_tab == 'teachers' ? 'active' : ''; ?>">
-                    <i class="fas fa-chalkboard-teacher"></i> Teacher Attendance
-                </a>
+            <!-- Teacher Attendance Statistics -->
+            <div class="stats-container">
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Today's Total</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-calendar-check"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $teacher_today; ?></div>
+                    <div class="stat-label">Teacher records today</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Present Today</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-user-check"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $teacher_present_today; ?></div>
+                    <div class="stat-label">Teachers present</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Absent Today</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-user-times"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $teacher_absent_today; ?></div>
+                    <div class="stat-label">Teachers absent</div>
+                </div>
+
+                <div class="stat-card">
+                    <div class="stat-header">
+                        <h3>Late Today</h3>
+                        <div class="stat-icon">
+                            <i class="fas fa-clock"></i>
+                        </div>
+                    </div>
+                    <div class="stat-number"><?php echo $teacher_late_today; ?></div>
+                    <div class="stat-label">Teachers late</div>
+                </div>
             </div>
 
-            <?php if($active_tab == 'students'): ?>
-                <!-- STUDENT ATTENDANCE SECTION -->
-                
-                <!-- Student Attendance Statistics -->
-                <div class="stats-container">
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Today's Total</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-calendar-check"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $total_today; ?></div>
-                        <div class="stat-label">Student records</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Present</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-user-check"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $present_today; ?></div>
-                        <div class="stat-label">Students present</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Absent</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-user-times"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $absent_today; ?></div>
-                        <div class="stat-label">Students absent</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Late</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-clock"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $late_today; ?></div>
-                        <div class="stat-label">Students late</div>
-                    </div>
+            <!-- Date Navigation -->
+            <div class="date-nav">
+                <div class="date-display">
+                    <h3><i class="fas fa-calendar-alt"></i> Teacher Attendance Records</h3>
+                    <span class="grade-tag">Total Records: <?php echo $overall['total_records'] ?? 0; ?></span>
+                    <span class="grade-tag">Teachers: <?php echo $overall['total_teachers'] ?? 0; ?></span>
+                    <?php if($overall['earliest_date']): ?>
+                        <span class="grade-tag">From: <?php echo date('M d, Y', strtotime($overall['earliest_date'])); ?></span>
+                    <?php endif; ?>
                 </div>
-
-                <!-- Date Navigation -->
-                <div class="date-nav">
-                    <div class="date-display">
-                        <h3><i class="fas fa-calendar-alt"></i> Student Attendance Records</h3>
-                    </div>
-                    <div class="date-picker">
-                        <form method="GET" action="" style="display: flex; gap: 10px;">
-                            <input type="hidden" name="tab" value="students">
-                            <input type="date" name="date" class="date-input" value="<?php echo $date_filter; ?>">
-                            <button type="submit" class="btn-date">
-                                <i class="fas fa-search"></i> View Date
-                            </button>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Filters Bar -->
-                <div class="filters-bar">
-                    <form method="GET" action="" class="filters-form">
-                        <input type="hidden" name="tab" value="students">
-                        <input type="hidden" name="date" value="<?php echo $date_filter; ?>">
-                        
-                        <div class="filter-group">
-                            <label>Grade Level</label>
-                            <select name="grade" class="filter-select">
-                                <option value="">All Grades</option>
-                                <?php 
-                                $grade_levels->data_seek(0);
-                                while($grade = $grade_levels->fetch_assoc()): 
-                                ?>
-                                    <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
-                                        <?php echo $grade['grade_name']; ?>
-                                    </option>
-                                <?php endwhile; ?>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label>Subject</label>
-                            <select name="subject" class="filter-select">
-                                <option value="">All Subjects</option>
-                                <?php 
-                                $subjects->data_seek(0);
-                                while($subject = $subjects->fetch_assoc()): 
-                                ?>
-                                    <option value="<?php echo $subject['id']; ?>" <?php echo $subject_filter == $subject['id'] ? 'selected' : ''; ?>>
-                                        <?php echo $subject['subject_name']; ?>
-                                    </option>
-                                <?php endwhile; ?>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label>Status</label>
-                            <select name="status" class="filter-select">
-                                <option value="">All Status</option>
-                                <option value="Present" <?php echo $status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
-                                <option value="Absent" <?php echo $status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
-                                <option value="Late" <?php echo $status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group" style="flex: 0 0 auto;">
-                            <button type="submit" class="btn-filter">
-                                <i class="fas fa-filter"></i> Apply Filters
-                            </button>
-                        </div>
-
-                        <div class="filter-group" style="flex: 0 0 auto;">
-                            <a href="attendance.php?tab=students" class="btn-reset">
-                                <i class="fas fa-redo-alt"></i> Reset
-                            </a>
-                        </div>
+                <div class="date-picker">
+                    <form method="GET" action="" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <select name="teacher_date" class="date-input">
+                            <option value="all">All Dates</option>
+                            <?php foreach($available_dates as $date): ?>
+                                <option value="<?php echo $date['date']; ?>" <?php echo $teacher_date_filter == $date['date'] ? 'selected' : ''; ?>>
+                                    <?php echo date('F d, Y', strtotime($date['date'])); ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <button type="submit" class="btn-date">
+                            <i class="fas fa-search"></i> Filter
+                        </button>
+                        <button type="button" class="btn-add" onclick="openAddTeacherModal()">
+                            <i class="fas fa-plus"></i> Add Record
+                        </button>
                     </form>
                 </div>
+            </div>
 
-                <!-- Student Attendance Table -->
-                <div class="table-card">
-                    <div class="table-header">
-                        <h3><i class="fas fa-calendar-check"></i> Student Attendance Records</h3>
-                        <span class="grade-tag">Total: <?php echo $attendance_records ? $attendance_records->num_rows : 0; ?> records</span>
+            <!-- Filters Bar -->
+            <div class="filters-bar">
+                <form method="GET" action="" class="filters-form">
+                    <input type="hidden" name="teacher_date" value="<?php echo $teacher_date_filter; ?>">
+                    
+                    <div class="filter-group">
+                        <label>Teacher</label>
+                        <select name="teacher" class="filter-select">
+                            <option value="">All Teachers</option>
+                            <?php foreach($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>" <?php echo $teacher_filter == $teacher['id'] ? 'selected' : ''; ?>>
+                                    <?php echo htmlspecialchars($teacher['fullname']); ?> <?php echo $teacher['id_number'] ?? ''; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
                     </div>
 
-                    <div class="table-container">
-                        <table class="attendance-table">
-                            <thead>
+                    <div class="filter-group">
+                        <label>Status</label>
+                        <select name="teacher_status" class="filter-select">
+                            <option value="">All Status</option>
+                            <option value="Present" <?php echo $teacher_status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
+                            <option value="Absent" <?php echo $teacher_status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
+                            <option value="Late" <?php echo $teacher_status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
+                            <option value="Pending" <?php echo $teacher_status_filter == 'Pending' ? 'selected' : ''; ?>>Pending</option>
+                        </select>
+                    </div>
+
+                    <div class="filter-group" style="flex: 0 0 auto;">
+                        <button type="submit" class="btn-filter">
+                            <i class="fas fa-filter"></i> Apply Filters
+                        </button>
+                    </div>
+
+                    <div class="filter-group" style="flex: 0 0 auto;">
+                        <a href="attendance.php" class="btn-reset">
+                            <i class="fas fa-redo-alt"></i> Reset
+                        </a>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Teacher Attendance Table -->
+            <div class="table-card">
+                <div class="table-header">
+                    <h3><i class="fas fa-calendar-check"></i> Teacher Attendance Records</h3>
+                    <span class="grade-tag">Showing: <?php echo $record_count; ?> records</span>
+                </div>
+
+                <div class="table-container">
+                    <?php if($record_count > 0): ?>
+                    <table class="attendance-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Teacher</th>
+                                <th>ID Number</th>
+                                <th>Time In</th>
+                                <th>Time Out</th>
+                                <th>Status</th>
+                                <th>Session Status</th>
+                                <th>QR Token</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach($teacher_attendance_records as $record): ?>
                                 <tr>
-                                    <th>Date</th>
-                                    <th>Student</th>
-                                    <th>ID Number</th>
-                                    <th>Subject</th>
-                                    <th>Grade</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
-                                    <?php while($record = $attendance_records->fetch_assoc()): ?>
-                                        <tr>
-                                            <td>
-                                                <span class="time-tag">
-                                                    <i class="far fa-calendar"></i>
-                                                    <?php echo date('M d, Y', strtotime($record['date'])); ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div class="person-info">
-                                                    <div class="person-avatar">
-                                                        <?php echo strtoupper(substr($record['student_name'], 0, 1)); ?>
-                                                    </div>
-                                                    <div class="person-details">
-                                                        <h4><?php echo htmlspecialchars($record['student_name']); ?></h4>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <span class="grade-tag"><?php echo $record['student_id_number'] ?? 'N/A'; ?></span>
-                                            </td>
-                                            <td>
-                                                <span class="subject-tag"><?php echo htmlspecialchars($record['subject_name']); ?></span>
-                                            </td>
-                                            <td>
-                                                <span class="grade-tag"><?php echo htmlspecialchars($record['grade_name']); ?></span>
-                                            </td>
-                                            <td>
-                                                <span class="badge badge-<?php echo strtolower($record['status']); ?>">
-                                                    <?php echo $record['status']; ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div class="action-btns">
-                                                    <a href="view_attendance.php?id=<?php echo $record['id']; ?>" class="btn-icon btn-view" title="View Details">
-                                                        <i class="fas fa-eye"></i>
-                                                    </a>
-                                                    <a href="?tab=students&delete=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
-                                                       onclick="return confirm('Are you sure you want to delete this attendance record?')">
-                                                        <i class="fas fa-trash"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endwhile; ?>
-                                <?php else: ?>
-                                    <tr>
-                                        <td colspan="7">
-                                            <div class="no-data">
-                                                <i class="fas fa-calendar-times"></i>
-                                                <h3>No Student Attendance Records Found</h3>
-                                                <p>Try adjusting your filters or select a different date.</p>
+                                    <td>
+                                        <span class="time-tag">
+                                            <i class="far fa-calendar"></i>
+                                            <?php echo date('M d, Y', strtotime($record['date'])); ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="person-info">
+                                            <div class="person-avatar">
+                                                <?php echo strtoupper(substr($record['teacher_name'], 0, 1)); ?>
                                             </div>
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-            <?php else: ?>
-                <!-- TEACHER ATTENDANCE SECTION -->
-                
-                <!-- Teacher Attendance Statistics -->
-                <div class="stats-container">
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Today's Total</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-calendar-check"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $teacher_today; ?></div>
-                        <div class="stat-label">Teacher records</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Present</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-user-check"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $teacher_present_today; ?></div>
-                        <div class="stat-label">Teachers present</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Absent</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-user-times"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $teacher_absent_today; ?></div>
-                        <div class="stat-label">Teachers absent</div>
-                    </div>
-
-                    <div class="stat-card">
-                        <div class="stat-header">
-                            <h3>Late</h3>
-                            <div class="stat-icon">
-                                <i class="fas fa-clock"></i>
-                            </div>
-                        </div>
-                        <div class="stat-number"><?php echo $teacher_late_today; ?></div>
-                        <div class="stat-label">Teachers late</div>
-                    </div>
-                </div>
-
-                <!-- Date Navigation -->
-                <div class="date-nav">
-                    <div class="date-display">
-                        <h3><i class="fas fa-calendar-alt"></i> Teacher Attendance Records</h3>
-                    </div>
-                    <div class="date-picker">
-                        <form method="GET" action="" style="display: flex; gap: 10px;">
-                            <input type="hidden" name="tab" value="teachers">
-                            <input type="date" name="teacher_date" class="date-input" value="<?php echo $teacher_date_filter; ?>">
-                            <button type="submit" class="btn-date">
-                                <i class="fas fa-search"></i> View Date
-                            </button>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Add Teacher Attendance Button -->
-                <div style="margin-bottom: 20px; text-align: right;">
-                    <button class="btn-add" onclick="openAddTeacherModal()">
-                        <i class="fas fa-plus"></i> Add Teacher Attendance
-                    </button>
-                </div>
-
-                <!-- Filters Bar -->
-                <div class="filters-bar">
-                    <form method="GET" action="" class="filters-form">
-                        <input type="hidden" name="tab" value="teachers">
-                        <input type="hidden" name="teacher_date" value="<?php echo $teacher_date_filter; ?>">
-                        
-                        <div class="filter-group">
-                            <label>Teacher</label>
-                            <select name="teacher" class="filter-select">
-                                <option value="">All Teachers</option>
-                                <?php 
-                                $teachers->data_seek(0);
-                                while($teacher = $teachers->fetch_assoc()): 
-                                ?>
-                                    <option value="<?php echo $teacher['id']; ?>" <?php echo isset($_GET['teacher']) && $_GET['teacher'] == $teacher['id'] ? 'selected' : ''; ?>>
-                                        <?php echo $teacher['fullname']; ?>
-                                    </option>
-                                <?php endwhile; ?>
-                            </select>
-                        </div>
-
-                        <div class="filter-group">
-                            <label>Status</label>
-                            <select name="teacher_status" class="filter-select">
-                                <option value="">All Status</option>
-                                <option value="Present" <?php echo $teacher_status_filter == 'Present' ? 'selected' : ''; ?>>Present</option>
-                                <option value="Absent" <?php echo $teacher_status_filter == 'Absent' ? 'selected' : ''; ?>>Absent</option>
-                                <option value="Late" <?php echo $teacher_status_filter == 'Late' ? 'selected' : ''; ?>>Late</option>
-                            </select>
-                        </div>
-
-                        <div class="filter-group" style="flex: 0 0 auto;">
-                            <button type="submit" class="btn-filter">
-                                <i class="fas fa-filter"></i> Apply Filters
-                            </button>
-                        </div>
-
-                        <div class="filter-group" style="flex: 0 0 auto;">
-                            <a href="attendance.php?tab=teachers" class="btn-reset">
-                                <i class="fas fa-redo-alt"></i> Reset
-                            </a>
-                        </div>
-                    </form>
-                </div>
-
-                <!-- Teacher Attendance Table -->
-                <div class="table-card">
-                    <div class="table-header">
-                        <h3><i class="fas fa-calendar-check"></i> Teacher Attendance Records</h3>
-                        <span class="grade-tag">Total: <?php echo $teacher_attendance_records ? $teacher_attendance_records->num_rows : 0; ?> records</span>
-                    </div>
-
-                    <div class="table-container">
-                        <table class="attendance-table">
-                            <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Teacher</th>
-                                    <th>ID Number</th>
-                                    <th>Time In</th>
-                                    <th>Time Out</th>
-                                    <th>Status</th>
-                                    <th>Remarks</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php if($teacher_attendance_records && $teacher_attendance_records->num_rows > 0): ?>
-                                    <?php while($record = $teacher_attendance_records->fetch_assoc()): ?>
-                                        <tr>
-                                            <td>
-                                                <span class="time-tag">
-                                                    <i class="far fa-calendar"></i>
-                                                    <?php echo date('M d, Y', strtotime($record['date'])); ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <div class="person-info">
-                                                    <div class="person-avatar">
-                                                        <?php echo strtoupper(substr($record['teacher_name'], 0, 1)); ?>
-                                                    </div>
-                                                    <div class="person-details">
-                                                        <h4><?php echo htmlspecialchars($record['teacher_name']); ?></h4>
-                                                        <span><?php echo htmlspecialchars($record['teacher_email']); ?></span>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td>
-                                                <span class="grade-tag"><?php echo $record['teacher_id_number'] ?? 'N/A'; ?></span>
-                                            </td>
-                                            <td>
-                                                <?php if($record['time_in']): ?>
-                                                    <span class="time-tag">
-                                                        <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_in'])); ?>
-                                                    </span>
-                                                <?php else: ?>
-                                                    <span class="grade-tag">—</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <?php if($record['time_out']): ?>
-                                                    <span class="time-tag">
-                                                        <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_out'])); ?>
-                                                    </span>
-                                                <?php else: ?>
-                                                    <span class="grade-tag">—</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td>
-                                                <span class="badge badge-<?php echo strtolower($record['status']); ?>">
-                                                    <?php echo $record['status']; ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <?php echo htmlspecialchars($record['remarks'] ?? '—'); ?>
-                                            </td>
-                                            <td>
-                                                <div class="action-btns">
-                                                    <a href="#" class="btn-icon btn-edit" title="Edit" onclick="openEditTeacherModal(<?php echo htmlspecialchars(json_encode($record)); ?>)">
-                                                        <i class="fas fa-edit"></i>
-                                                    </a>
-                                                    <a href="?tab=teachers&delete_teacher=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
-                                                       onclick="return confirm('Are you sure you want to delete this teacher attendance record?')">
-                                                        <i class="fas fa-trash"></i>
-                                                    </a>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    <?php endwhile; ?>
-                                <?php else: ?>
-                                    <tr>
-                                        <td colspan="8">
-                                            <div class="no-data">
-                                                <i class="fas fa-calendar-times"></i>
-                                                <h3>No Teacher Attendance Records Found</h3>
-                                                <p>Try adjusting your filters or select a different date.</p>
+                                            <div class="person-details">
+                                                <h4><?php echo htmlspecialchars($record['teacher_name']); ?></h4>
+                                                <span><i class="fas fa-envelope"></i> <?php echo htmlspecialchars($record['teacher_email']); ?></span>
                                             </div>
-                                        </td>
-                                    </tr>
-                                <?php endif; ?>
-                            </tbody>
-                        </table>
-                    </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="grade-tag"><?php echo $record['teacher_id_number'] ?? 'N/A'; ?></span>
+                                    </td>
+                                    <td>
+                                        <?php if($record['time_in'] && $record['time_in'] != '00:00:00'): ?>
+                                            <span class="time-tag">
+                                                <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_in'])); ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="grade-tag">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if($record['time_out'] && $record['time_out'] != '00:00:00'): ?>
+                                            <span class="time-tag">
+                                                <i class="fas fa-clock"></i> <?php echo date('h:i A', strtotime($record['time_out'])); ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="grade-tag">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-<?php echo strtolower($record['status']); ?>">
+                                            <?php echo $record['status']; ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <?php if(isset($record['session_status']) && $record['session_status']): ?>
+                                            <span class="badge badge-<?php echo strtolower($record['session_status']); ?>">
+                                                <?php echo ucfirst($record['session_status']); ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="grade-tag">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <?php if(isset($record['qr_token']) && $record['qr_token']): ?>
+                                            <span class="time-tag" title="<?php echo $record['qr_token']; ?>">
+                                                <i class="fas fa-qrcode"></i> 
+                                                <?php echo substr($record['qr_token'], 0, 8); ?>...
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="grade-tag">—</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <div class="action-btns">
+                                            <a href="?delete_teacher=<?php echo $record['id']; ?>" class="btn-icon btn-delete" title="Delete" 
+                                               onclick="return confirm('Are you sure you want to delete this teacher attendance record?')">
+                                                <i class="fas fa-trash"></i>
+                                            </a>
+                                        </div>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                        <div class="no-data">
+                            <i class="fas fa-calendar-times"></i>
+                            <h3>No Teacher Attendance Records Found</h3>
+                            <?php if($overall['total_records'] > 0): ?>
+                            <?php else: ?>
+                                <p style="margin-top: 10px;">Teachers can generate QR codes and scan to record their attendance, or you can manually add records using the "Add Record" button above.</p>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
-            <?php endif; ?>
+            </div>
         </div>
     </div>
 
@@ -1634,22 +1341,19 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                 <h3><i class="fas fa-plus-circle"></i> Add Teacher Attendance</h3>
                 <button class="close-modal" onclick="closeAddTeacherModal()">&times;</button>
             </div>
-            <form method="POST" action="add_teacher_attendance.php">
+            <form method="POST" action="">
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Teacher</label>
+                        <label>Teacher *</label>
                         <select name="teacher_id" required>
                             <option value="">Select Teacher</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>"><?php echo htmlspecialchars($teacher['fullname']); ?> (<?php echo $teacher['id_number'] ?? 'No ID'; ?>)</option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Date</label>
+                        <label>Date *</label>
                         <input type="date" name="date" value="<?php echo date('Y-m-d'); ?>" required>
                     </div>
                     <div class="form-group">
@@ -1661,11 +1365,12 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                         <input type="time" name="time_out">
                     </div>
                     <div class="form-group">
-                        <label>Status</label>
+                        <label>Status *</label>
                         <select name="status" required>
                             <option value="Present">Present</option>
                             <option value="Absent">Absent</option>
                             <option value="Late">Late</option>
+                            <option value="Pending">Pending</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1688,23 +1393,20 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                 <h3><i class="fas fa-edit"></i> Edit Teacher Attendance</h3>
                 <button class="close-modal" onclick="closeEditTeacherModal()">&times;</button>
             </div>
-            <form method="POST" action="edit_teacher_attendance.php">
+            <form method="POST" action="">
                 <input type="hidden" name="id" id="edit_id">
                 <div class="modal-body">
                     <div class="form-group">
-                        <label>Teacher</label>
+                        <label>Teacher *</label>
                         <select name="teacher_id" id="edit_teacher_id" required>
                             <option value="">Select Teacher</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>"><?php echo htmlspecialchars($teacher['fullname']); ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>Date</label>
+                        <label>Date *</label>
                         <input type="date" name="date" id="edit_date" required>
                     </div>
                     <div class="form-group">
@@ -1716,11 +1418,12 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
                         <input type="time" name="time_out" id="edit_time_out">
                     </div>
                     <div class="form-group">
-                        <label>Status</label>
+                        <label>Status *</label>
                         <select name="status" id="edit_status" required>
                             <option value="Present">Present</option>
                             <option value="Absent">Absent</option>
                             <option value="Late">Late</option>
+                            <option value="Pending">Pending</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1741,12 +1444,14 @@ $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'students';
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
-                alert.style.opacity = '0';
                 setTimeout(() => {
-                    alert.style.display = 'none';
-                }, 300);
+                    alert.style.opacity = '0';
+                    setTimeout(() => {
+                        alert.style.display = 'none';
+                    }, 300);
+                }, 5000);
             });
-        }, 5000);
+        });
 
         // Add Teacher Modal Functions
         function openAddTeacherModal() {

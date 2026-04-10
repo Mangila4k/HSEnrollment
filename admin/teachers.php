@@ -9,8 +9,15 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Admin'){
 }
 
 $admin_name = $_SESSION['user']['fullname'];
+$admin_id = $_SESSION['user']['id'];
 $success_message = '';
 $error_message = '';
+
+// Get admin profile picture
+$admin_stmt = $conn->prepare("SELECT profile_picture FROM users WHERE id = ?");
+$admin_stmt->execute([$admin_id]);
+$admin_data = $admin_stmt->fetch(PDO::FETCH_ASSOC);
+$profile_picture = $admin_data['profile_picture'] ?? null;
 
 // Check for session messages
 if(isset($_SESSION['success_message'])) {
@@ -27,22 +34,30 @@ if(isset($_SESSION['error_message'])) {
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Check if teacher is assigned as adviser
-    $check_adviser = $conn->query("SELECT id FROM sections WHERE adviser_id = '$delete_id'");
-    if($check_adviser && $check_adviser->num_rows > 0) {
-        $error_message = "Cannot delete teacher because they are assigned as adviser to a section.";
-    } else {
-        $delete = $conn->query("DELETE FROM users WHERE id = '$delete_id' AND role = 'Teacher'");
-        if($delete) {
-            $success_message = "Teacher deleted successfully!";
+    try {
+        // Check if teacher is assigned as adviser
+        $check_adviser = $conn->prepare("SELECT id FROM sections WHERE adviser_id = ?");
+        $check_adviser->execute([$delete_id]);
+        
+        if($check_adviser->rowCount() > 0) {
+            $error_message = "Cannot delete teacher because they are assigned as adviser to a section.";
         } else {
-            $error_message = "Error deleting teacher.";
+            $delete = $conn->prepare("DELETE FROM users WHERE id = ? AND role = 'Teacher'");
+            $delete->execute([$delete_id]);
+            
+            if($delete->rowCount() > 0) {
+                $success_message = "Teacher deleted successfully!";
+            } else {
+                $error_message = "Error deleting teacher.";
+            }
         }
+    } catch(PDOException $e) {
+        $error_message = "Error: " . $e->getMessage();
     }
 }
 
 // Get all teachers
-$teachers = $conn->query("
+$teachers_stmt = $conn->prepare("
     SELECT u.*, 
            COUNT(DISTINCT s.id) as section_count,
            GROUP_CONCAT(DISTINCT s.section_name SEPARATOR ', ') as sections
@@ -52,17 +67,21 @@ $teachers = $conn->query("
     GROUP BY u.id
     ORDER BY u.fullname
 ");
+$teachers_stmt->execute();
+$teachers = $teachers_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get statistics
-$total_teachers = $teachers->num_rows;
-$teachers->data_seek(0);
+$total_teachers = count($teachers);
 
-$with_sections = $conn->query("
+// Get teachers with sections
+$with_sections_stmt = $conn->prepare("
     SELECT COUNT(DISTINCT u.id) as count 
     FROM users u 
     JOIN sections s ON u.id = s.adviser_id 
     WHERE u.role = 'Teacher'
-")->fetch_assoc()['count'];
+");
+$with_sections_stmt->execute();
+$with_sections = $with_sections_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 $without_sections = $total_teachers - $with_sections;
 ?>
@@ -123,23 +142,6 @@ $without_sections = $total_teachers - $with_sections;
             box-shadow: 4px 0 10px rgba(0, 0, 0, 0.1);
         }
 
-        .sidebar h2 {
-            font-size: 24px;
-            margin-bottom: 30px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: #fff;
-            font-weight: 700;
-            letter-spacing: 1px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-        }
-
-        .sidebar h2 i {
-            color: #FFD700;
-        }
-
         .admin-info {
             text-align: center;
             padding: 20px 0;
@@ -150,16 +152,31 @@ $without_sections = $total_teachers - $with_sections;
         .admin-avatar {
             width: 80px;
             height: 80px;
-            background: #FFD700;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             margin: 0 auto 15px;
+            border: 3px solid white;
+            overflow: hidden;
+            background: #FFD700;
+        }
+
+        .admin-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .admin-avatar .avatar-initial {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             font-size: 32px;
             font-weight: bold;
             color: #0B4F2E;
-            border: 3px solid white;
         }
 
         .admin-info h3 {
@@ -237,6 +254,8 @@ $without_sections = $total_teachers - $with_sections;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
         }
 
         .header-left h1 {
@@ -274,56 +293,6 @@ $without_sections = $total_teachers - $with_sections;
 
         .back-btn i {
             color: #0B4F2E;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -745,7 +714,6 @@ $without_sections = $total_teachers - $with_sections;
                 padding: 20px 10px;
             }
             
-            .sidebar h2 span,
             .admin-info h3,
             .admin-info p,
             .menu-section h3,
@@ -756,7 +724,6 @@ $without_sections = $total_teachers - $with_sections;
             .admin-avatar {
                 width: 50px;
                 height: 50px;
-                font-size: 20px;
             }
             
             .menu-items a {
@@ -773,12 +740,6 @@ $without_sections = $total_teachers - $with_sections;
                 flex-direction: column;
                 gap: 15px;
                 align-items: flex-start;
-            }
-            
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
             }
             
             .stats-container {
@@ -827,14 +788,15 @@ $without_sections = $total_teachers - $with_sections;
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
             <div class="admin-info">
                 <div class="admin-avatar">
-                    <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                    <?php if($profile_picture && file_exists("../" . $profile_picture)): ?>
+                        <img src="../<?php echo $profile_picture; ?>" alt="Profile Picture">
+                    <?php else: ?>
+                        <div class="avatar-initial">
+                            <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
                 <h3><?php echo htmlspecialchars(explode(' ', $admin_name)[0]); ?></h3>
                 <p><i class="fas fa-user-shield"></i> Administrator</p>
@@ -973,8 +935,8 @@ $without_sections = $total_teachers - $with_sections;
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($teachers && $teachers->num_rows > 0): ?>
-                                <?php while($teacher = $teachers->fetch_assoc()): ?>
+                            <?php if(count($teachers) > 0): ?>
+                                <?php foreach($teachers as $teacher): ?>
                                     <tr>
                                         <td>
                                             <div class="teacher-info">
@@ -997,7 +959,7 @@ $without_sections = $total_teachers - $with_sections;
                                             <?php if($teacher['section_count'] > 0): ?>
                                                 <div class="section-tags">
                                                     <?php 
-                                                    $sections = explode(', ', $teacher['sections']);
+                                                    $sections = !empty($teacher['sections']) ? explode(', ', $teacher['sections']) : [];
                                                     foreach($sections as $section): 
                                                     ?>
                                                         <span class="section-tag"><?php echo htmlspecialchars($section); ?></span>
@@ -1029,7 +991,7 @@ $without_sections = $total_teachers - $with_sections;
                                             </div>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
                                     <td colspan="6">
@@ -1045,7 +1007,8 @@ $without_sections = $total_teachers - $with_sections;
                     </table>
                 </div>
 
-                <!-- Pagination -->
+                <!-- Pagination (Optional - can be implemented later) -->
+                <?php if(count($teachers) > 10): ?>
                 <div class="pagination">
                     <button class="page-btn active">1</button>
                     <button class="page-btn">2</button>
@@ -1053,6 +1016,7 @@ $without_sections = $total_teachers - $with_sections;
                     <button class="page-btn">4</button>
                     <button class="page-btn">5</button>
                 </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -1064,7 +1028,7 @@ $without_sections = $total_teachers - $with_sections;
             let tableRows = document.querySelectorAll('#teachersTable tbody tr');
             
             tableRows.forEach(row => {
-                if (row.style.display !== 'none') { // Only search visible rows
+                if (row.style.display !== 'none') {
                     let text = row.textContent.toLowerCase();
                     row.style.display = text.includes(searchValue) ? '' : 'none';
                 }

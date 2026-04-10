@@ -13,49 +13,73 @@ $teacher_id = $_SESSION['user']['id'];
 $teacher_name = $_SESSION['user']['fullname'];
 
 // Get sections where teacher is adviser
-$sections_query = $conn->query("
+$sections_query = $conn->prepare("
     SELECT s.*, g.grade_name 
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
-    WHERE s.adviser_id = '$teacher_id'
+    WHERE s.adviser_id = ?
 ");
+$sections_query->execute([$teacher_id]);
+$sections = $sections_query->fetchAll(PDO::FETCH_ASSOC);
 
-// Since there's no teacher_id in subjects table, we'll get all subjects
-// or you can modify this based on how subjects are assigned to teachers in your system
-$subjects_query = $conn->query("
-    SELECT sub.*, g.grade_name 
-    FROM subjects sub
-    JOIN grade_levels g ON sub.grade_id = g.id
-    LIMIT 10
-"); // Showing limited subjects for now
+// Get all grade levels for the filter dropdown
+$grade_levels_query = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels = $grade_levels_query->fetchAll(PDO::FETCH_ASSOC);
+
+// Get subjects based on selected grade (default to first grade or all)
+$selected_grade_id = isset($_GET['grade_id']) ? intval($_GET['grade_id']) : 0;
+
+if ($selected_grade_id > 0) {
+    // Get subjects filtered by grade
+    $subjects_query = $conn->prepare("
+        SELECT sub.*, g.grade_name 
+        FROM subjects sub
+        JOIN grade_levels g ON sub.grade_id = g.id
+        WHERE sub.grade_id = ?
+        ORDER BY sub.subject_name
+    ");
+    $subjects_query->execute([$selected_grade_id]);
+} else {
+    // Get all subjects
+    $subjects_query = $conn->prepare("
+        SELECT sub.*, g.grade_name 
+        FROM subjects sub
+        JOIN grade_levels g ON sub.grade_id = g.id
+        ORDER BY g.id, sub.subject_name
+    ");
+    $subjects_query->execute();
+}
+$subjects = $subjects_query->fetchAll(PDO::FETCH_ASSOC);
 
 // Get today's attendance count
 $today = date('Y-m-d');
-$attendance_today = $conn->query("
+$attendance_today_stmt = $conn->prepare("
     SELECT COUNT(*) as count 
     FROM attendance 
-    WHERE date = '$today'
-")->fetch_assoc()['count'];
+    WHERE date = ?
+");
+$attendance_today_stmt->execute([$today]);
+$attendance_today = $attendance_today_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get total students in teacher's sections
 $total_students = 0;
-if($sections_query && $sections_query->num_rows > 0) {
-    while($section = $sections_query->fetch_assoc()) {
-        $student_count = $conn->query("
+if(count($sections) > 0) {
+    foreach($sections as $section) {
+        $student_count_stmt = $conn->prepare("
             SELECT COUNT(*) as count 
             FROM enrollments e
             JOIN users u ON e.student_id = u.id
-            WHERE e.grade_id = '{$section['grade_id']}' 
+            WHERE e.grade_id = ? 
             AND e.status = 'Enrolled'
-        ")->fetch_assoc()['count'];
+        ");
+        $student_count_stmt->execute([$section['grade_id']]);
+        $student_count = $student_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
         $total_students += $student_count;
     }
-    // Reset pointer
-    $sections_query->data_seek(0);
 }
 
-// Get recent attendance records (without teacher_id filter)
-$recent_attendance = $conn->query("
+// Get recent attendance records
+$recent_attendance_stmt = $conn->prepare("
     SELECT a.*, u.fullname, sub.subject_name
     FROM attendance a
     JOIN users u ON a.student_id = u.id
@@ -63,6 +87,8 @@ $recent_attendance = $conn->query("
     ORDER BY a.date DESC, a.created_at DESC
     LIMIT 10
 ");
+$recent_attendance_stmt->execute();
+$recent_attendance = $recent_attendance_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -70,7 +96,7 @@ $recent_attendance = $conn->query("
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Placido L. Señor Senior High School</title>
+    <title>Placido L. Señor Senior High School - Teacher Dashboard</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -502,6 +528,70 @@ $recent_attendance = $conn->query("
             color: #0B4F2E;
         }
 
+        /* Subject Filter */
+        .subject-filter {
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .filter-group label {
+            font-weight: 600;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .grade-select {
+            padding: 10px 15px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            color: var(--text-primary);
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .grade-select:hover, .grade-select:focus {
+            border-color: #0B4F2E;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(11, 79, 46, 0.1);
+        }
+
+        .filter-btn {
+            background: #0B4F2E;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .filter-btn:hover {
+            background: #1a7a42;
+            transform: translateY(-2px);
+        }
+
+        .filter-btn.reset {
+            background: #6c757d;
+        }
+
+        .filter-btn.reset:hover {
+            background: #5a6268;
+        }
+
         /* Recent Attendance */
         .recent-attendance {
             background: white;
@@ -668,7 +758,7 @@ $recent_attendance = $conn->query("
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php" class="active"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Take Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance</span></a></li>
                     <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -685,14 +775,23 @@ $recent_attendance = $conn->query("
         </div>
 
         <!-- Main Content -->
-         
         <div class="main-content">
+            <!-- Welcome Card -->
+            <div class="welcome-card">
+                <div class="welcome-text">
+                    <h2>Welcome back, <?php echo htmlspecialchars(explode(' ', $teacher_name)[0]); ?>!</h2>
+                    <p><i class="fas fa-calendar-alt"></i> <?php echo date('l, F d, Y'); ?></p>
+                </div>
+                <a href="../auth/logout.php" class="logout-btn">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </a>
+            </div>
+
             <!-- Header -->
             <div class="dashboard-header">
                 <h1>Teacher Dashboard</h1>
                 <p>Manage your classes, attendance, and student progress</p>
             </div>
-
 
             <!-- Statistics -->
             <div class="stats-container">
@@ -714,7 +813,7 @@ $recent_attendance = $conn->query("
                             <i class="fas fa-layer-group"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $sections_query ? $sections_query->num_rows : 0; ?></div>
+                    <div class="stat-number"><?php echo count($sections); ?></div>
                     <div class="stat-label">Classes handling</div>
                 </div>
 
@@ -725,8 +824,8 @@ $recent_attendance = $conn->query("
                             <i class="fas fa-book"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $subjects_query ? $subjects_query->num_rows : 0; ?></div>
-                    <div class="stat-label">Available subjects</div>
+                    <div class="stat-number"><?php echo count($subjects); ?></div>
+                    <div class="stat-label">Showing subjects</div>
                 </div>
 
                 <div class="stat-card">
@@ -745,13 +844,13 @@ $recent_attendance = $conn->query("
             <div class="quick-actions">
                 <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
                 <div class="action-buttons">
-                    <a href="attendance.php" class="action-btn">
+                    <a href="attendance_qr.php" class="action-btn">
                         <div class="action-icon">
-                            <i class="fas fa-camera"></i>
+                            <i class="fas fa-qrcode"></i>
                         </div>
                         <div class="action-content">
-                            <h4>Take Attendance</h4>
-                            <p>Record student attendance for today</p>
+                            <h4>QR Attendance</h4>
+                            <p>Scan QR code to record attendance</p>
                         </div>
                     </a>
                     
@@ -792,9 +891,9 @@ $recent_attendance = $conn->query("
                 <!-- My Sections -->
                 <div class="info-card">
                     <h3><i class="fas fa-layer-group"></i> My Sections</h3>
-                    <?php if($sections_query && $sections_query->num_rows > 0): ?>
+                    <?php if(count($sections) > 0): ?>
                         <ul class="section-list">
-                            <?php while($section = $sections_query->fetch_assoc()): ?>
+                            <?php foreach($sections as $section): ?>
                                 <li class="section-item">
                                     <div class="section-info">
                                         <h4><?php echo htmlspecialchars($section['section_name']); ?></h4>
@@ -802,7 +901,7 @@ $recent_attendance = $conn->query("
                                     </div>
                                     <span class="badge">Adviser</span>
                                 </li>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </ul>
                     <?php else: ?>
                         <div class="no-data">
@@ -812,63 +911,52 @@ $recent_attendance = $conn->query("
                     <?php endif; ?>
                 </div>
 
-                <!-- Subjects -->
+                <!-- Subjects with Grade Filter -->
                 <div class="info-card">
                     <h3><i class="fas fa-book"></i> School Subjects</h3>
-                    <?php if($subjects_query && $subjects_query->num_rows > 0): ?>
+                    
+                    <!-- Filter Form -->
+                    <div class="subject-filter">
+                        <form method="GET" action="" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+                            <div class="filter-group">
+                                <label for="grade_id">Filter by Grade:</label>
+                                <select name="grade_id" id="grade_id" class="grade-select">
+                                    <option value="0">All Grades</option>
+                                    <?php foreach($grade_levels as $grade): ?>
+                                        <option value="<?php echo $grade['id']; ?>" <?php echo ($selected_grade_id == $grade['id']) ? 'selected' : ''; ?>>
+                                            <?php echo htmlspecialchars($grade['grade_name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <button type="submit" class="filter-btn">
+                                <i class="fas fa-filter"></i> Filter
+                            </button>
+                            <a href="dashboard.php" class="filter-btn reset">
+                                <i class="fas fa-undo-alt"></i> Reset
+                            </a>
+                        </form>
+                    </div>
+
+                    <!-- Subjects List -->
+                    <?php if(count($subjects) > 0): ?>
                         <ul class="subject-list">
-                            <?php while($subject = $subjects_query->fetch_assoc()): ?>
+                            <?php foreach($subjects as $subject): ?>
                                 <li class="subject-item">
                                     <div class="subject-info">
                                         <h4><?php echo htmlspecialchars($subject['subject_name']); ?></h4>
                                         <p><i class="fas fa-graduation-cap"></i> <?php echo htmlspecialchars($subject['grade_name']); ?></p>
                                     </div>
                                 </li>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </ul>
                     <?php else: ?>
                         <div class="no-data">
                             <i class="fas fa-book"></i>
-                            <p>No subjects found</p>
+                            <p>No subjects found for this grade level.</p>
                         </div>
                     <?php endif; ?>
                 </div>
-            </div>
-
-            <!-- Recent Attendance -->
-            <div class="recent-attendance">
-                <h3><i class="fas fa-history"></i> Recent Attendance Records</h3>
-                <?php if($recent_attendance && $recent_attendance->num_rows > 0): ?>
-                    <table class="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Student</th>
-                                <th>Subject</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php while($record = $recent_attendance->fetch_assoc()): ?>
-                                <tr>
-                                    <td><?php echo date('M d, Y', strtotime($record['date'])); ?></td>
-                                    <td><?php echo htmlspecialchars($record['fullname']); ?></td>
-                                    <td><?php echo htmlspecialchars($record['subject_name']); ?></td>
-                                    <td>
-                                        <span class="status-badge status-<?php echo strtolower($record['status']); ?>">
-                                            <?php echo $record['status']; ?>
-                                        </span>
-                                    </td>
-                                </tr>
-                            <?php endwhile; ?>
-                        </tbody>
-                    </table>
-                <?php else: ?>
-                    <div class="no-data">
-                        <i class="fas fa-calendar-times"></i>
-                        <p>No attendance records found</p>
-                    </div>
-                <?php endif; ?>
             </div>
         </div>
     </div>

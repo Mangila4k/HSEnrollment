@@ -10,9 +10,9 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Teacher'){
 // Include database after session check
 require_once("../config/database.php");
 
-// Check if connection is successful
+// Check if connection is successful (PDO)
 if (!$conn) {
-    die("Database connection failed: " . mysqli_connect_error());
+    die("Database connection failed");
 }
 
 $teacher_id = $_SESSION['user']['id'];
@@ -35,28 +35,30 @@ if(isset($_SESSION['error_message'])) {
 // Get section details and verify teacher has access
 $section_query = "
     SELECT s.*, g.grade_name, u.fullname as adviser_name,
-           CASE WHEN s.adviser_id = ? THEN 1 ELSE 0 END as is_adviser
+           CASE WHEN s.adviser_id = :teacher_id THEN 1 ELSE 0 END as is_adviser
     FROM sections s
     LEFT JOIN grade_levels g ON s.grade_id = g.id
     LEFT JOIN users u ON s.adviser_id = u.id
-    WHERE s.id = ? AND (
-        s.adviser_id = ? OR 
+    WHERE s.id = :section_id AND (
+        s.adviser_id = :teacher_id OR 
         EXISTS (
             SELECT 1 FROM class_schedules cs 
-            WHERE cs.section_id = s.id AND cs.teacher_id = ?
+            WHERE cs.section_id = s.id AND cs.teacher_id = :teacher_id2
         )
     )
 ";
 
 $stmt = $conn->prepare($section_query);
 if (!$stmt) {
-    die("Error preparing section query: " . $conn->error);
+    die("Error preparing section query: " . $conn->errorInfo()[2]);
 }
-$stmt->bind_param("iiii", $teacher_id, $section_id, $teacher_id, $teacher_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$section = $result->fetch_assoc();
-$stmt->close();
+$stmt->execute([
+    ':teacher_id' => $teacher_id,
+    ':section_id' => $section_id,
+    ':teacher_id2' => $teacher_id
+]);
+$section = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt->closeCursor();
 
 if(!$section) {
     $_SESSION['error_message'] = "Section not found or you don't have access to this section.";
@@ -68,7 +70,7 @@ if(!$section) {
 $columns_check = $conn->query("SHOW COLUMNS FROM enrollments");
 $enrollment_columns = [];
 if($columns_check) {
-    while($col = $columns_check->fetch_assoc()) {
+    while($col = $columns_check->fetch(PDO::FETCH_ASSOC)) {
         $enrollment_columns[] = $col['Field'];
     }
 }
@@ -84,14 +86,14 @@ if(in_array('section_id', $enrollment_columns)) {
             e.status as enrollment_status
         FROM users u
         JOIN enrollments e ON u.id = e.student_id
-        WHERE e.section_id = ? AND u.role = 'Student'
+        WHERE e.section_id = :section_id AND u.role = 'Student'
         ORDER BY u.fullname
     ";
     $stmt = $conn->prepare($students_query);
     if (!$stmt) {
-        die("Error preparing students query: " . $conn->error);
+        die("Error preparing students query: " . $conn->errorInfo()[2]);
     }
-    $stmt->bind_param("i", $section_id);
+    $stmt->execute([':section_id' => $section_id]);
 } else {
     // If no section_id, get students by grade_id
     $students_query = "
@@ -102,19 +104,18 @@ if(in_array('section_id', $enrollment_columns)) {
             e.status as enrollment_status
         FROM users u
         JOIN enrollments e ON u.id = e.student_id
-        WHERE e.grade_id = ? AND u.role = 'Student'
+        WHERE e.grade_id = :grade_id AND u.role = 'Student'
         ORDER BY u.fullname
     ";
     $stmt = $conn->prepare($students_query);
     if (!$stmt) {
-        die("Error preparing students query: " . $conn->error);
+        die("Error preparing students query: " . $conn->errorInfo()[2]);
     }
-    $stmt->bind_param("i", $section['grade_id']);
+    $stmt->execute([':grade_id' => $section['grade_id']]);
 }
 
-$stmt->execute();
-$students = $stmt->get_result();
-$stmt->close();
+$students = $stmt;
+$student_count = $stmt->rowCount();
 
 // Get class schedule for this section
 $schedule_query = "
@@ -132,31 +133,31 @@ $schedule_query = "
     LEFT JOIN users u ON cs.teacher_id = u.id
     LEFT JOIN days_of_week d ON cs.day_id = d.id
     LEFT JOIN time_slots ts ON cs.time_slot_id = ts.id
-    WHERE cs.section_id = ? AND (cs.status = 'active' OR cs.status IS NULL)
+    WHERE cs.section_id = :section_id AND (cs.status = 'active' OR cs.status IS NULL)
     ORDER BY d.day_order, ts.start_time
 ";
 
-$stmt = $conn->prepare($schedule_query);
-if (!$stmt) {
+try {
+    $stmt = $conn->prepare($schedule_query);
+    $stmt->execute([':section_id' => $section_id]);
+    $schedule = $stmt;
+    $schedule_count = $stmt->rowCount();
+} catch(PDOException $e) {
     // If table doesn't exist, just set to empty
     $schedule = null;
-} else {
-    $stmt->bind_param("i", $section_id);
-    $stmt->execute();
-    $schedule = $stmt->get_result();
-    $stmt->close();
+    $schedule_count = 0;
 }
 
 // Organize schedule by day for display
 $subjects_taught = [];
-if($schedule && $schedule->num_rows > 0) {
-    $schedule->data_seek(0);
-    while($class = $schedule->fetch_assoc()) {
+if($schedule && $schedule_count > 0) {
+    $schedule->execute([':section_id' => $section_id]); // Re-execute to reset pointer
+    while($class = $schedule->fetch(PDO::FETCH_ASSOC)) {
         if($class['teacher_id'] == $teacher_id) {
             $subjects_taught[] = $class['subject_name'];
         }
     }
-    $schedule->data_seek(0); // Reset pointer for later use
+    $schedule->execute([':section_id' => $section_id]); // Reset pointer for later use
 }
 
 // Get attendance statistics (check if attendance table exists)
@@ -168,7 +169,7 @@ $attendance_stats = [
 ];
 
 $table_check = $conn->query("SHOW TABLES LIKE 'attendance'");
-if($table_check && $table_check->num_rows > 0) {
+if($table_check && $table_check->rowCount() > 0) {
     if(in_array('section_id', $enrollment_columns)) {
         $attendance_query = "
             SELECT 
@@ -179,14 +180,13 @@ if($table_check && $table_check->num_rows > 0) {
             FROM attendance a
             JOIN users u ON a.student_id = u.id
             JOIN enrollments e ON u.id = e.student_id
-            WHERE e.section_id = ?
+            WHERE e.section_id = :section_id
         ";
         $stmt = $conn->prepare($attendance_query);
         if($stmt) {
-            $stmt->bind_param("i", $section_id);
-            $stmt->execute();
-            $stats = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
+            $stmt->execute([':section_id' => $section_id]);
+            $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->closeCursor();
             
             $attendance_stats = [
                 'total' => $stats['total'] ?? 0,
@@ -1026,7 +1026,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance</span></a></li>
                     <li><a href="classes.php" class="active"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -1104,7 +1104,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                     </div>
                     <div class="stat-content">
                         <h3>Total Students</h3>
-                        <div class="stat-number"><?php echo $students->num_rows; ?></div>
+                        <div class="stat-number"><?php echo $student_count; ?></div>
                         <div class="stat-label">Enrolled in this section</div>
                     </div>
                 </div>
@@ -1115,7 +1115,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                     </div>
                     <div class="stat-content">
                         <h3>Subjects</h3>
-                        <div class="stat-number"><?php echo $schedule ? $schedule->num_rows : 0; ?></div>
+                        <div class="stat-number"><?php echo $schedule_count; ?></div>
                         <div class="stat-label">Classes scheduled</div>
                     </div>
                 </div>
@@ -1149,11 +1149,11 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-user-graduate"></i> Enrolled Students</h3>
-                        <span class="badge"><?php echo $students->num_rows; ?> students</span>
+                        <span class="badge"><?php echo $student_count; ?> students</span>
                     </div>
 
                     <div class="table-container">
-                        <?php if($students && $students->num_rows > 0): ?>
+                        <?php if($students && $student_count > 0): ?>
                             <table class="students-table">
                                 <thead>
                                     <tr>
@@ -1163,7 +1163,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php while($student = $students->fetch_assoc()): ?>
+                                    <?php while($student = $students->fetch(PDO::FETCH_ASSOC)): ?>
                                         <tr>
                                             <td>
                                                 <div class="student-info">
@@ -1185,9 +1185,6 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                                                 <div class="action-btns">
                                                     <a href="view_student.php?id=<?php echo $student['id']; ?>" class="btn-icon btn-view" title="View Student">
                                                         <i class="fas fa-eye"></i>
-                                                    </a>
-                                                    <a href="attendance.php?student_id=<?php echo $student['id']; ?>&section_id=<?php echo $section_id; ?>" class="btn-icon btn-view" title="View Attendance">
-                                                        <i class="fas fa-calendar-check"></i>
                                                     </a>
                                                     <a href="grades.php?student_id=<?php echo $student['id']; ?>" class="btn-icon btn-view" title="View Grades">
                                                         <i class="fas fa-star"></i>
@@ -1212,12 +1209,14 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 <div class="card">
                     <div class="card-header">
                         <h3><i class="fas fa-calendar-alt"></i> Class Schedule</h3>
-                        <span class="badge"><?php echo $schedule ? $schedule->num_rows : 0; ?> classes</span>
+                        <span class="badge"><?php echo $schedule_count; ?> classes</span>
                     </div>
 
                     <div class="schedule-list">
-                        <?php if($schedule && $schedule->num_rows > 0): ?>
-                            <?php while($class = $schedule->fetch_assoc()): 
+                        <?php if($schedule && $schedule_count > 0): ?>
+                            <?php 
+                            $schedule->execute([':section_id' => $section_id]);
+                            while($class = $schedule->fetch(PDO::FETCH_ASSOC)): 
                                 $is_my_class = ($class['teacher_id'] == $teacher_id);
                             ?>
                                 <div class="schedule-item <?php echo $is_my_class ? 'taught-by-me' : ''; ?>">
@@ -1261,9 +1260,6 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                     <h3><i class="fas fa-bolt"></i> Quick Actions</h3>
                 </div>
                 <div class="quick-actions">
-                    <a href="attendance.php?section_id=<?php echo $section_id; ?>" class="action-btn primary">
-                        <i class="fas fa-calendar-check"></i> Take Attendance
-                    </a>
                     <a href="grades.php?section_id=<?php echo $section_id; ?>" class="action-btn warning">
                         <i class="fas fa-star"></i> Manage Grades
                     </a>

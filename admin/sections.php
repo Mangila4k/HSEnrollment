@@ -12,31 +12,63 @@ $admin_name = $_SESSION['user']['fullname'];
 $success_message = '';
 $error_message = '';
 
+// Check for session messages
+if(isset($_SESSION['success_message'])) {
+    $success_message = $_SESSION['success_message'];
+    unset($_SESSION['success_message']);
+}
+
+if(isset($_SESSION['error_message'])) {
+    $error_message = $_SESSION['error_message'];
+    unset($_SESSION['error_message']);
+}
+
 // Handle delete action
 if(isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
-    $delete = $conn->query("DELETE FROM sections WHERE id = '$delete_id'");
-    if($delete) {
-        $success_message = "Section deleted successfully!";
-    } else {
-        $error_message = "Error deleting section.";
+    
+    try {
+        // Check if section has enrollments
+        $check_enrollments = $conn->prepare("SELECT id FROM enrollments WHERE section_id = ?");
+        $check_enrollments->execute([$delete_id]);
+        
+        if($check_enrollments->rowCount() > 0) {
+            $error_message = "Cannot delete section because it has enrolled students.";
+        } else {
+            $delete = $conn->prepare("DELETE FROM sections WHERE id = ?");
+            $delete->execute([$delete_id]);
+            
+            if($delete->rowCount() > 0) {
+                $success_message = "Section deleted successfully!";
+            } else {
+                $error_message = "Error deleting section.";
+            }
+        }
+    } catch(PDOException $e) {
+        $error_message = "Error: " . $e->getMessage();
     }
 }
 
 // Get all sections with details
-$sections = $conn->query("
+$sections_stmt = $conn->prepare("
     SELECT s.id, s.section_name, g.grade_name, u.fullname as adviser, u.id as adviser_id
     FROM sections s 
     LEFT JOIN grade_levels g ON s.grade_id = g.id
     LEFT JOIN users u ON s.adviser_id = u.id
     ORDER BY g.id, s.section_name
 ");
+$sections_stmt->execute();
+$sections = $sections_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get teachers for adviser selection
-$teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$teachers_stmt = $conn->prepare("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$teachers_stmt->execute();
+$teachers = $teachers_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -209,6 +241,8 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
         }
 
         .header-left h1 {
@@ -246,56 +280,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
 
         .back-btn i {
             color: #0B4F2E;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: #FFD700;
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -576,10 +560,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             color: #0B4F2E;
         }
 
-        .btn-edit:hover {
-            color: #0B4F2E;
-        }
-
         .btn-delete:hover {
             color: #dc3545;
         }
@@ -819,12 +799,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .filter-group {
                 flex-direction: column;
                 width: 100%;
@@ -862,10 +836,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
             
             <div class="admin-info">
                 <div class="admin-avatar">
@@ -937,19 +907,16 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                 <div class="filter-group">
                     <select class="filter-select" id="gradeFilter">
                         <option value="">All Grade Levels</option>
-                        <?php while($grade = $grade_levels->fetch_assoc()): ?>
-                            <option value="<?php echo $grade['grade_name']; ?>"><?php echo $grade['grade_name']; ?></option>
-                        <?php endwhile; ?>
+                        <?php foreach($grade_levels as $grade): ?>
+                            <option value="<?php echo htmlspecialchars($grade['grade_name']); ?>"><?php echo htmlspecialchars($grade['grade_name']); ?></option>
+                        <?php endforeach; ?>
                     </select>
                     
                     <select class="filter-select" id="adviserFilter">
                         <option value="">All Advisers</option>
-                        <?php 
-                        $teachers->data_seek(0);
-                        while($teacher = $teachers->fetch_assoc()): 
-                        ?>
-                            <option value="<?php echo $teacher['fullname']; ?>"><?php echo $teacher['fullname']; ?></option>
-                        <?php endwhile; ?>
+                        <?php foreach($teachers as $teacher): ?>
+                            <option value="<?php echo htmlspecialchars($teacher['fullname']); ?>"><?php echo htmlspecialchars($teacher['fullname']); ?></option>
+                        <?php endforeach; ?>
                     </select>
                 </div>
 
@@ -967,7 +934,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             <div class="table-card">
                 <div class="table-header">
                     <h3><i class="fas fa-layer-group"></i> Section List</h3>
-                    <span class="grade-badge">Total: <?php echo $sections->num_rows; ?> sections</span>
+                    <span class="grade-badge">Total: <?php echo count($sections); ?> sections</span>
                 </div>
 
                 <div class="table-container">
@@ -981,8 +948,8 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($sections && $sections->num_rows > 0): ?>
-                                <?php while($sec = $sections->fetch_assoc()): ?>
+                            <?php if(count($sections) > 0): ?>
+                                <?php foreach($sections as $sec): ?>
                                     <tr>
                                         <td>
                                             <div class="section-info">
@@ -1014,15 +981,9 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                                         </td>
                                         <td>
                                             <div class="action-btns">
-                                                <!-- Schedule Button - NEW -->
                                                 <a href="create_schedule.php?section_id=<?php echo $sec['id']; ?>" class="btn-icon btn-schedule" title="Manage Schedule">
                                                     <i class="fas fa-calendar-alt"></i>
                                                 </a>
-                                                <!-- Edit Button -->
-                                                <a href="#" class="btn-icon btn-edit" onclick="openEditModal(<?php echo $sec['id']; ?>)" title="Edit Section">
-                                                    <i class="fas fa-edit"></i>
-                                                </a>
-                                                <!-- Delete Button -->
                                                 <a href="?delete=<?php echo $sec['id']; ?>" class="btn-icon btn-delete" 
                                                    onclick="return confirm('Are you sure you want to delete this section?')" title="Delete Section">
                                                     <i class="fas fa-trash"></i>
@@ -1030,7 +991,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                                             </div>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
                                     <td colspan="4">
@@ -1044,15 +1005,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                             <?php endif; ?>
                         </tbody>
                     </table>
-                </div>
-
-                <!-- Pagination -->
-                <div class="pagination">
-                    <button class="page-btn active">1</button>
-                    <button class="page-btn">2</button>
-                    <button class="page-btn">3</button>
-                    <button class="page-btn">4</button>
-                    <button class="page-btn">5</button>
                 </div>
             </div>
         </div>
@@ -1075,77 +1027,24 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                         <label>Grade Level</label>
                         <select name="grade_id" required>
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $grade['id']; ?>"><?php echo $grade['grade_name']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($grade_levels as $grade): ?>
+                                <option value="<?php echo $grade['id']; ?>"><?php echo htmlspecialchars($grade['grade_name']); ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="form-group">
                         <label>Adviser</label>
                         <select name="adviser_id">
                             <option value="">Select Adviser (Optional)</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
+                            <?php foreach($teachers as $teacher): ?>
+                                <option value="<?php echo $teacher['id']; ?>"><?php echo htmlspecialchars($teacher['fullname']); ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn-cancel" onclick="closeAddModal()">Cancel</button>
                     <button type="submit" name="add_section" class="btn-save">Add Section</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Edit Section Modal -->
-    <div class="modal" id="editModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3><i class="fas fa-edit"></i> Edit Section</h3>
-                <button class="close-modal" onclick="closeEditModal()">&times;</button>
-            </div>
-            <form method="POST" action="sections_edit.php" id="editForm">
-                <input type="hidden" name="section_id" id="edit_section_id">
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label>Section Name</label>
-                        <input type="text" name="section_name" id="edit_section_name" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Grade Level</label>
-                        <select name="grade_id" id="edit_grade_id" required>
-                            <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $grade['id']; ?>"><?php echo $grade['grade_name']; ?></option>
-                            <?php endwhile; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Adviser</label>
-                        <select name="adviser_id" id="edit_adviser_id">
-                            <option value="">Select Adviser (Optional)</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
-                                <option value="<?php echo $teacher['id']; ?>"><?php echo $teacher['fullname']; ?></option>
-                            <?php endwhile; ?>
-                        </select>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-cancel" onclick="closeEditModal()">Cancel</button>
-                    <button type="submit" name="edit_section" class="btn-save">Save Changes</button>
                 </div>
             </form>
         </div>
@@ -1161,29 +1060,13 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             document.getElementById('addModal').classList.remove('active');
         }
 
-        function openEditModal(id) {
-            // Fetch section data via AJAX
-            fetch(`get_section.php?id=${id}`)
-                .then(response => response.json())
-                .then(data => {
-                    document.getElementById('edit_section_id').value = data.id;
-                    document.getElementById('edit_section_name').value = data.section_name;
-                    document.getElementById('edit_grade_id').value = data.grade_id;
-                    document.getElementById('edit_adviser_id').value = data.adviser_id || '';
-                    document.getElementById('editModal').classList.add('active');
-                });
-        }
-
-        function closeEditModal() {
-            document.getElementById('editModal').classList.remove('active');
-        }
-
         // Search functionality
         document.getElementById('searchInput').addEventListener('keyup', function() {
             let searchValue = this.value.toLowerCase();
             let tableRows = document.querySelectorAll('#sectionsTable tbody tr');
             
             tableRows.forEach(row => {
+                if (row.querySelector('.no-data')) return;
                 let text = row.textContent.toLowerCase();
                 row.style.display = text.includes(searchValue) ? '' : 'none';
             });
@@ -1204,6 +1087,8 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             let tableRows = document.querySelectorAll('#sectionsTable tbody tr');
             
             tableRows.forEach(row => {
+                if (row.querySelector('.no-data')) return;
+                
                 let gradeCell = row.cells[1]?.textContent.toLowerCase() || '';
                 let adviserCell = row.cells[2]?.textContent.toLowerCase() || '';
                 

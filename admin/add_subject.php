@@ -12,8 +12,10 @@ $admin_name = $_SESSION['user']['fullname'];
 $error = '';
 $success = '';
 
-// Get grade levels for dropdown
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+// Get grade levels for dropdown using PDO
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Handle form submission
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
@@ -34,32 +36,26 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
     
     // Check if subject already exists for this grade level
     if(empty($errors)) {
-        $check_query = "SELECT id FROM subjects WHERE subject_name = ? AND grade_id = ?";
-        $check_stmt = $conn->prepare($check_query);
-        $check_stmt->bind_param("si", $subject_name, $grade_id);
-        $check_stmt->execute();
-        $check_result = $check_stmt->get_result();
+        $check_stmt = $conn->prepare("SELECT id FROM subjects WHERE subject_name = ? AND grade_id = ?");
+        $check_stmt->execute([$subject_name, $grade_id]);
         
-        if($check_result->num_rows > 0) {
+        if($check_stmt->rowCount() > 0) {
             $errors[] = "Subject already exists for this grade level";
         }
-        $check_stmt->close();
     }
     
     // If no errors, insert the subject
     if(empty($errors)) {
-        $insert_query = "INSERT INTO subjects (subject_name, grade_id) VALUES (?, ?)";
-        $insert_stmt = $conn->prepare($insert_query);
-        $insert_stmt->bind_param("si", $subject_name, $grade_id);
-        
-        if($insert_stmt->execute()) {
+        try {
+            $insert_stmt = $conn->prepare("INSERT INTO subjects (subject_name, grade_id) VALUES (?, ?)");
+            $insert_stmt->execute([$subject_name, $grade_id]);
+            
             $_SESSION['success_message'] = "Subject added successfully!";
             header("Location: subjects.php");
             exit();
-        } else {
-            $errors[] = "Database error: " . $conn->error;
+        } catch(PDOException $e) {
+            $errors[] = "Database error: " . $e->getMessage();
         }
-        $insert_stmt->close();
     }
     
     // If there are errors, store them
@@ -87,18 +83,18 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary-color: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --danger: #dc3545;
+            --warning: #ffc107;
+            --info: #17a2b8;
         }
 
         body {
@@ -260,6 +256,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
             box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
         }
 
@@ -325,35 +323,17 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
             font-size: 20px;
-        }
-
-        .error-list {
-            list-style: none;
-            margin-top: 10px;
-        }
-
-        .error-list li {
-            color: #dc3545;
-            font-size: 14px;
-            margin-bottom: 5px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .error-list li i {
-            font-size: 14px;
         }
 
         /* Form Card */
@@ -399,6 +379,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             margin-left: 3px;
         }
 
+        .input-wrapper {
+            position: relative;
+        }
+
         .form-group input,
         .form-group select,
         .form-group textarea {
@@ -421,10 +405,11 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
         }
 
-        .form-group input.error,
-        .form-group select.error {
-            border-color: #dc3545;
-            background: #fff8f8;
+        .form-group input:read-only,
+        .form-group textarea:read-only {
+            background: #e9ecef;
+            cursor: not-allowed;
+            border-color: #dee2e6;
         }
 
         .form-group input::placeholder,
@@ -445,6 +430,99 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         .form-hint i {
             color: #0B4F2E;
             font-size: 13px;
+        }
+
+        /* Category Tags */
+        .category-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .category-tag {
+            padding: 8px 16px;
+            border-radius: 25px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: 2px solid transparent;
+        }
+
+        .category-tag.core {
+            background: rgba(11, 79, 46, 0.1);
+            color: #0B4F2E;
+        }
+
+        .category-tag.core:hover {
+            background: #0B4F2E;
+            color: white;
+        }
+
+        .category-tag.major {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+        }
+
+        .category-tag.major:hover {
+            background: #ffc107;
+            color: white;
+        }
+
+        .category-tag.elective {
+            background: rgba(23, 162, 184, 0.1);
+            color: #17a2b8;
+        }
+
+        .category-tag.elective:hover {
+            background: #17a2b8;
+            color: white;
+        }
+
+        /* Quick Add Buttons */
+        .quick-add-section {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+
+        .quick-add-section h4 {
+            color: var(--text-primary);
+            font-size: 14px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .quick-add-section h4 i {
+            color: #0B4F2E;
+        }
+
+        .quick-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .quick-btn {
+            background: white;
+            color: var(--text-secondary);
+            padding: 8px 14px;
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .quick-btn:hover {
+            border-color: #0B4F2E;
+            color: #0B4F2E;
+            background: white;
+            transform: translateY(-2px);
         }
 
         /* Preview Card */
@@ -498,10 +576,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         .preview-details h5 {
             color: var(--text-primary);
             font-size: 18px;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
         }
 
-        .preview-details .preview-grade {
+        .preview-grade {
             display: inline-block;
             padding: 4px 12px;
             background: rgba(11, 79, 46, 0.1);
@@ -509,16 +587,16 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             border-radius: 20px;
             font-size: 12px;
             font-weight: 600;
-            margin-top: 5px;
         }
 
-        .preview-details .preview-description {
+        .preview-description {
             color: var(--text-secondary);
             font-size: 13px;
             margin-top: 8px;
             font-style: italic;
         }
 
+        /* Form Actions */
         .form-actions {
             display: flex;
             gap: 15px;
@@ -529,7 +607,7 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 
         .btn-submit {
             flex: 1;
-            background: #0B4F2E;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             color: white;
             padding: 14px;
             border: none;
@@ -545,7 +623,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
         }
 
         .btn-submit:hover {
-            background: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -575,52 +652,17 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             background: #fff8f8;
         }
 
-        /* Subject Categories */
-        .category-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        .category-tag {
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: 2px solid transparent;
-        }
-
-        .category-tag.core {
-            background: rgba(11, 79, 46, 0.1);
-            color: #0B4F2E;
-        }
-
-        .category-tag.core:hover {
+        /* Active Category Indicator */
+        .active-category {
             background: #0B4F2E;
             color: white;
+            position: relative;
         }
 
-        .category-tag.major {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
-        }
-
-        .category-tag.major:hover {
-            background: #ffc107;
-            color: white;
-        }
-
-        .category-tag.elective {
-            background: rgba(76, 201, 240, 0.1);
-            color: #4cc9f0;
-        }
-
-        .category-tag.elective:hover {
-            background: #4cc9f0;
-            color: white;
+        .active-category::after {
+            content: '✓';
+            margin-left: 5px;
+            font-size: 12px;
         }
 
         /* Responsive */
@@ -679,7 +721,8 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 text-align: center;
             }
             
-            .category-tags {
+            .category-tags,
+            .quick-buttons {
                 justify-content: center;
             }
         }
@@ -757,13 +800,6 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                     <?php echo $error; ?>
                 </div>
             <?php endif; ?>
-            
-            <?php if($success): ?>
-                <div class="alert alert-success">
-                    <i class="fas fa-check-circle"></i>
-                    <?php echo $success; ?>
-                </div>
-            <?php endif; ?>
 
             <!-- Form Card -->
             <div class="form-card">
@@ -773,24 +809,25 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 </h3>
 
                 <form method="POST" action="" id="subjectForm">
-                    <!-- Subject Category Quick Select (Optional - for UX) -->
-                    <div class="category-tags">
-                        <span class="category-tag core" onclick="setSubjectCategory('Core')">Core Subject</span>
-                        <span class="category-tag major" onclick="setSubjectCategory('Major')">Major Subject</span>
-                        <span class="category-tag elective" onclick="setSubjectCategory('Elective')">Elective</span>
+                    <!-- Subject Category Quick Select -->
+                    <div class="category-tags" id="categoryTags">
+                        <span class="category-tag core" onclick="selectCategory('Core')">📚 Core Subject</span>
+                        <span class="category-tag elective" onclick="selectCategory('Elective')">🎯 Elective</span>
                     </div>
 
                     <div class="form-group">
                         <label>Subject Name <span>*</span></label>
-                        <input type="text" 
-                               id="subject_name" 
-                               name="subject_name" 
-                               placeholder="e.g., Mathematics, Science, English" 
-                               value="<?php echo isset($_POST['subject_name']) ? htmlspecialchars($_POST['subject_name']) : ''; ?>" 
-                               required>
+                        <div class="input-wrapper">
+                            <input type="text" 
+                                   id="subject_name" 
+                                   name="subject_name" 
+                                   placeholder="Enter Subject Name" 
+                                   value="<?php echo isset($_POST['subject_name']) ? htmlspecialchars($_POST['subject_name']) : 'Enter Subject Name'; ?>" 
+                                   required>
+                        </div>
                         <div class="form-hint">
                             <i class="fas fa-info-circle"></i>
-                            Enter the full subject name
+                            Click on category tags above to add a prefix. The prefix cannot be erased once added.
                         </div>
                     </div>
 
@@ -798,15 +835,12 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                         <label>Grade Level <span>*</span></label>
                         <select id="grade_id" name="grade_id" required>
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" 
                                     <?php echo (isset($_POST['grade_id']) && $_POST['grade_id'] == $grade['id']) ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($grade['grade_name']); ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
 
@@ -823,19 +857,10 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                     </div>
 
                     <!-- Quick Add Common Subjects -->
-                    <div style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 10px;">
-                        <h4 style="color: var(--text-primary); font-size: 14px; margin-bottom: 10px; display: flex; align-items: center; gap: 5px;">
-                            <i class="fas fa-bolt" style="color: #0B4F2E;"></i> Quick Add Common Subjects
-                        </h4>
-                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Mathematics')">Mathematics</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Science')">Science</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('English')">English</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Filipino')">Filipino</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Araling Panlipunan')">Araling Panlipunan</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('MAPEH')">MAPEH</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Edukasyon sa Pagpapakatao')">Edukasyon sa Pagpapakatao</button>
-                            <button type="button" class="btn-reset" style="padding: 8px 12px; font-size: 12px;" onclick="setSubjectName('Technology and Livelihood Education')">TLE</button>
+                    <div class="quick-add-section">
+                        <h4><i class="fas fa-bolt"></i> Quick Add Common Subjects</h4>
+                        <div class="quick-buttons" id="quickButtons">
+                            <!-- Buttons will be populated dynamically based on grade level -->
                         </div>
                     </div>
 
@@ -847,13 +872,12 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                                 <i class="fas fa-book"></i>
                             </div>
                             <div class="preview-details">
-                                <h5 id="previewName"><?php echo isset($_POST['subject_name']) ? htmlspecialchars($_POST['subject_name']) : 'New Subject'; ?></h5>
+                                <h5 id="previewName"><?php echo isset($_POST['subject_name']) ? htmlspecialchars($_POST['subject_name']) : 'Enter Subject Name'; ?></h5>
                                 <div>
                                     <span class="preview-grade" id="previewGrade">
                                         <?php 
                                         if(isset($_POST['grade_id'])) {
-                                            $grade_levels->data_seek(0);
-                                            while($g = $grade_levels->fetch_assoc()) {
+                                            foreach($grade_levels as $g) {
                                                 if($g['id'] == $_POST['grade_id']) {
                                                     echo $g['grade_name'];
                                                     break;
@@ -886,23 +910,271 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
     </div>
 
     <script>
-        // Live preview update
+        // Create grade options object for preview
+        const gradeOptions = {};
+        <?php foreach($grade_levels as $grade): ?>
+            gradeOptions[<?php echo $grade['id']; ?>] = "<?php echo $grade['grade_name']; ?>";
+        <?php endforeach; ?>
+
+        // Subject lists by grade level
+        const juniorHighSubjects = [
+            'Mathematics', 'Science', 'English', 'Filipino', 'Araling Panlipunan', 
+            'MAPEH', 'Edukasyon sa Pagpapakatao', 'Technology and Livelihood Education'
+        ];
+        
+        const seniorHighSubjects = [
+            'General Mathematics', 'Statistics and Probability', 'Earth Science', 'Physical Science',
+            '21st Century Literature', 'Oral Communication', 'Reading and Writing Skills',
+            'Personal Development', 'Understanding Culture, Society and Politics',
+            'Introduction to Philosophy', 'Physical Education and Health'
+        ];
+
+        // Get DOM elements
         const subjectNameInput = document.getElementById('subject_name');
         const gradeSelect = document.getElementById('grade_id');
         const descriptionInput = document.getElementById('description');
         const previewName = document.getElementById('previewName');
         const previewGrade = document.getElementById('previewGrade');
         const previewDescription = document.getElementById('previewDescription');
+        const categoryTags = document.getElementById('categoryTags');
+        const quickButtons = document.getElementById('quickButtons');
 
-        // Store grade options for preview
-        const gradeOptions = {};
-        <?php 
-        $grade_levels->data_seek(0);
-        while($grade = $grade_levels->fetch_assoc()): 
-        ?>
-            gradeOptions[<?php echo $grade['id']; ?>] = "<?php echo $grade['grade_name']; ?>";
-        <?php endwhile; ?>
+        let currentCategory = null;
+        let isPrefixProtected = false;
+        let currentPrefix = '';
 
+        // Function to select a category and add protected prefix
+        function selectCategory(category) {
+            const gradeId = parseInt(gradeSelect.value);
+            
+            // Check if grade level is selected
+            if (!gradeId) {
+                alert('Please select a grade level first');
+                return;
+            }
+            
+            // For Senior High, only allow Major category (handled separately)
+            const isSeniorHigh = gradeId === 5 || gradeId === 6;
+            if (isSeniorHigh) {
+                alert('For Senior High, only "Major" category is available.');
+                return;
+            }
+            
+            currentCategory = category;
+            const prefix = category + ':';
+            
+            // Remove any existing prefix
+            const prefixes = ['Core:', 'Major:', 'Elective:'];
+            let currentValue = subjectNameInput.value;
+            for (let p of prefixes) {
+                if (currentValue.startsWith(p)) {
+                    currentValue = currentValue.substring(p.length).trim();
+                    break;
+                }
+            }
+            
+            // Set new value with prefix
+            if (currentValue === 'Enter Subject Name') {
+                subjectNameInput.value = prefix + ' Enter Subject Name';
+            } else {
+                subjectNameInput.value = prefix + ' ' + currentValue;
+            }
+            
+            isPrefixProtected = true;
+            currentPrefix = prefix;
+            
+            // Update active state on category tags
+            document.querySelectorAll('.category-tag').forEach(tag => {
+                tag.classList.remove('active-category');
+            });
+            event.target.classList.add('active-category');
+            
+            updatePreview();
+        }
+
+        // Function to enforce prefix protection
+        function enforcePrefixProtection() {
+            const currentValue = subjectNameInput.value;
+            
+            if (isPrefixProtected && currentPrefix) {
+                if (!currentValue.startsWith(currentPrefix)) {
+                    subjectNameInput.value = currentPrefix + ' ' + currentValue;
+                }
+            }
+        }
+
+        // Function to prevent erasing the protected prefix
+        function protectPrefix(e) {
+            if (!isPrefixProtected || !currentPrefix) return;
+            
+            const start = this.selectionStart;
+            const end = this.selectionEnd;
+            const prefixLength = currentPrefix.length;
+            
+            // Check if user is trying to delete the prefix
+            if (start < prefixLength && end > 0) {
+                e.preventDefault();
+                alert(`The "${currentPrefix}" prefix is protected and cannot be erased.`);
+                return false;
+            }
+        }
+
+        // Function to handle input while protecting prefix
+        function handleInput(e) {
+            if (!isPrefixProtected || !currentPrefix) return;
+            
+            let newValue = this.value;
+            
+            // Ensure prefix is always present
+            if (!newValue.startsWith(currentPrefix)) {
+                if (newValue === '' || newValue === 'Enter Subject Name') {
+                    this.value = currentPrefix + ' Enter Subject Name';
+                } else {
+                    this.value = currentPrefix + ' ' + newValue;
+                }
+            }
+            
+            // Prevent deleting the prefix entirely
+            if (newValue === currentPrefix) {
+                this.value = currentPrefix + ' Enter Subject Name';
+            }
+            
+            updatePreview();
+        }
+
+        // Function to update category tags based on grade level
+        function updateCategoryTags() {
+            const gradeId = parseInt(gradeSelect.value);
+            const isSeniorHigh = gradeId === 5 || gradeId === 6;
+            
+            if (isSeniorHigh) {
+                // For Senior High, show only Major category
+                categoryTags.innerHTML = `
+                    <span class="category-tag major" onclick="selectMajorCategory()">⭐ Major Subject (Required)</span>
+                `;
+                // Auto-select Major category
+                if (!currentCategory) {
+                    selectMajorCategory();
+                }
+            } else if (gradeId) {
+                // For Junior High, show Core and Elective
+                categoryTags.innerHTML = `
+                    <span class="category-tag core" onclick="selectCategory('Core')">📚 Core Subject</span>
+                    <span class="category-tag elective" onclick="selectCategory('Elective')">🎯 Elective</span>
+                `;
+                // Reset prefix protection if no category selected
+                if (!currentCategory) {
+                    isPrefixProtected = false;
+                    currentPrefix = '';
+                }
+            } else {
+                // No grade selected, show default but disable
+                categoryTags.innerHTML = `
+                    <span class="category-tag core" onclick="selectCategory('Core')">📚 Core Subject</span>
+                    <span class="category-tag elective" onclick="selectCategory('Elective')">🎯 Elective</span>
+                `;
+            }
+        }
+
+        // Function to select Major category (for Senior High)
+        function selectMajorCategory() {
+            const gradeId = parseInt(gradeSelect.value);
+            const isSeniorHigh = gradeId === 5 || gradeId === 6;
+            
+            if (!isSeniorHigh) {
+                alert('Major category is only available for Senior High (Grades 11-12)');
+                return;
+            }
+            
+            currentCategory = 'Major';
+            currentPrefix = 'Major:';
+            
+            // Set the value with prefix
+            let currentValue = subjectNameInput.value;
+            if (currentValue === 'Enter Subject Name' || currentValue === '' || currentValue === 'Core:' || currentValue === 'Elective:') {
+                subjectNameInput.value = currentPrefix + ' Enter Subject Name';
+            } else {
+                // Remove any existing prefix
+                const prefixes = ['Core:', 'Major:', 'Elective:'];
+                for (let p of prefixes) {
+                    if (currentValue.startsWith(p)) {
+                        currentValue = currentValue.substring(p.length).trim();
+                        break;
+                    }
+                }
+                subjectNameInput.value = currentPrefix + ' ' + currentValue;
+            }
+            
+            isPrefixProtected = true;
+            
+            // Update active state
+            document.querySelectorAll('.category-tag').forEach(tag => {
+                tag.classList.remove('active-category');
+            });
+            const activeTag = document.querySelector('.category-tag.major');
+            if (activeTag) activeTag.classList.add('active-category');
+            
+            updatePreview();
+        }
+
+        // Function to update quick buttons based on grade level
+        function updateQuickButtons() {
+            const gradeId = parseInt(gradeSelect.value);
+            const isSeniorHigh = gradeId === 5 || gradeId === 6;
+            
+            if (!gradeId) {
+                quickButtons.innerHTML = '<p style="color: var(--text-secondary); font-size: 12px;">Select a grade level to see quick add options</p>';
+                return;
+            }
+            
+            let subjects = [];
+            if (isSeniorHigh) {
+                subjects = seniorHighSubjects;
+            } else {
+                subjects = juniorHighSubjects;
+            }
+            
+            // Generate buttons
+            quickButtons.innerHTML = subjects.map(subject => 
+                `<button type="button" class="quick-btn" onclick="setSubjectName('${subject}')">${subject}</button>`
+            ).join('');
+        }
+
+        // Set subject name from quick add
+        function setSubjectName(name) {
+            let currentValue = subjectNameInput.value;
+            
+            if (isPrefixProtected && currentPrefix) {
+                // For protected fields, add after the prefix
+                if (currentValue === currentPrefix + ' Enter Subject Name' || currentValue === currentPrefix) {
+                    subjectNameInput.value = currentPrefix + ' ' + name;
+                } else {
+                    // Remove prefix for checking duplicates
+                    let cleanValue = currentValue.substring(currentPrefix.length).trim();
+                    if (!cleanValue.includes(name)) {
+                        subjectNameInput.value = currentValue + ', ' + name;
+                    } else {
+                        alert('This subject is already in the list');
+                    }
+                }
+            } else {
+                // For unprotected fields
+                if (currentValue === 'Enter Subject Name') {
+                    subjectNameInput.value = name;
+                } else {
+                    if (!currentValue.includes(name)) {
+                        subjectNameInput.value = currentValue + ', ' + name;
+                    } else {
+                        alert('This subject is already in the list');
+                    }
+                }
+            }
+            
+            updatePreview();
+            subjectNameInput.focus();
+        }
+
+        // Update preview function
         function updatePreview() {
             // Update subject name
             const subjectName = subjectNameInput.value.trim() || 'New Subject';
@@ -921,51 +1193,99 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
             previewDescription.textContent = description;
         }
 
-        subjectNameInput.addEventListener('input', updatePreview);
-        gradeSelect.addEventListener('change', updatePreview);
-        descriptionInput.addEventListener('input', updatePreview);
-
-        // Set subject name from quick add
-        function setSubjectName(name) {
-            subjectNameInput.value = name;
-            updatePreview();
-            subjectNameInput.focus();
-        }
-
-        // Set subject category (adds prefix to subject name)
-        function setSubjectCategory(category) {
-            let currentName = subjectNameInput.value.trim();
-            if (currentName) {
-                // Check if already has a category prefix
+        // Reset category when grade changes
+        function resetCategory() {
+            const gradeId = parseInt(gradeSelect.value);
+            const isSeniorHigh = gradeId === 5 || gradeId === 6;
+            
+            if (isSeniorHigh) {
+                // For Senior High, automatically set Major category
+                selectMajorCategory();
+            } else {
+                // For Junior High, reset protection
+                currentCategory = null;
+                isPrefixProtected = false;
+                currentPrefix = '';
+                
+                // Remove any existing prefix from the value
+                let currentValue = subjectNameInput.value;
                 const prefixes = ['Core:', 'Major:', 'Elective:'];
-                let hasPrefix = false;
-                for (let prefix of prefixes) {
-                    if (currentName.startsWith(prefix)) {
-                        hasPrefix = true;
-                        currentName = currentName.substring(prefix.length).trim();
+                for (let p of prefixes) {
+                    if (currentValue.startsWith(p)) {
+                        currentValue = currentValue.substring(p.length).trim();
+                        subjectNameInput.value = currentValue;
                         break;
                     }
                 }
-                subjectNameInput.value = category + ': ' + currentName;
-            } else {
-                subjectNameInput.value = category + ': ';
+                
+                // Remove active class from category tags
+                document.querySelectorAll('.category-tag').forEach(tag => {
+                    tag.classList.remove('active-category');
+                });
             }
             updatePreview();
-            subjectNameInput.focus();
         }
+
+        // Add event listeners
+        if (subjectNameInput) {
+            subjectNameInput.addEventListener('keydown', protectPrefix);
+            subjectNameInput.addEventListener('input', handleInput);
+            subjectNameInput.addEventListener('blur', enforcePrefixProtection);
+        }
+        
+        if (gradeSelect) {
+            gradeSelect.addEventListener('change', function() {
+                resetCategory();
+                updateCategoryTags();
+                updateQuickButtons();
+                updatePreview();
+            });
+        }
+        
+        if (descriptionInput) descriptionInput.addEventListener('input', updatePreview);
+
+        // Initialize on page load
+        updateCategoryTags();
+        updateQuickButtons();
+        updatePreview();
 
         // Form validation
         document.getElementById('subjectForm').addEventListener('submit', function(e) {
             const subjectName = subjectNameInput.value.trim();
             const gradeId = gradeSelect.value;
-
-            if (!subjectName) {
-                e.preventDefault();
-                alert('Please enter a subject name');
-            } else if (!gradeId) {
+            
+            if (gradeId === '5' || gradeId === '6') {
+                if (!subjectName.startsWith('Major:') || subjectName === 'Major:' || subjectName === 'Major: Enter Subject Name') {
+                    e.preventDefault();
+                    alert('For Senior High subjects, you must enter a subject name with the "Major:" prefix.');
+                    return false;
+                }
+            } else {
+                // For Junior High, check if a category is selected
+                if (!isPrefixProtected && subjectName !== 'Enter Subject Name' && subjectName !== '') {
+                    // Allow if user manually entered without category
+                    if (!subjectName.startsWith('Core:') && !subjectName.startsWith('Elective:')) {
+                        // No category selected, but user can proceed if they entered a custom name
+                        if (subjectName === 'Enter Subject Name' || subjectName === '') {
+                            e.preventDefault();
+                            alert('Please select a category (Core or Elective) or enter a valid subject name.');
+                            return false;
+                        }
+                    }
+                } else if (subjectName === 'Enter Subject Name' || subjectName === 'Core: Enter Subject Name' || subjectName === 'Elective: Enter Subject Name') {
+                    e.preventDefault();
+                    alert('Please enter a valid subject name');
+                    return false;
+                }
+            }
+            
+            if (!gradeId) {
                 e.preventDefault();
                 alert('Please select a grade level');
+                return false;
             }
+            
+            return true;
         });
 
         // Auto-hide alerts after 5 seconds

@@ -18,20 +18,16 @@ if(!isset($_GET['id']) || empty($_GET['id'])) {
 
 $student_id = $_GET['id'];
 
-// Get student details
+// Get student details - PDO version
 $query = "SELECT * FROM users WHERE id = ? AND role = 'Student'";
 $stmt = $conn->prepare($query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
+$stmt->execute([$student_id]);
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if($result->num_rows === 0) {
+if(!$student) {
     header("Location: students.php");
     exit();
 }
-
-$student = $result->fetch_assoc();
-$stmt->close();
 
 // Get student's enrollment history
 $enrollments_query = "
@@ -42,14 +38,9 @@ $enrollments_query = "
     ORDER BY e.created_at DESC
 ";
 $stmt = $conn->prepare($enrollments_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$enrollments = $stmt->get_result();
-$current_enrollment = $enrollments->fetch_assoc(); // First row is current enrollment
-$stmt->close();
-
-// Reset pointer for history table
-$enrollments->data_seek(0);
+$stmt->execute([$student_id]);
+$enrollments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$current_enrollment = !empty($enrollments) ? $enrollments[0] : null; // First row is current enrollment
 
 // Get student's attendance records
 $attendance_query = "
@@ -61,10 +52,8 @@ $attendance_query = "
     LIMIT 10
 ";
 $stmt = $conn->prepare($attendance_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$attendance = $stmt->get_result();
-$stmt->close();
+$stmt->execute([$student_id]);
+$attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Calculate attendance statistics
 $attendance_stats = [
@@ -81,14 +70,12 @@ $stats_query = "
     GROUP BY status
 ";
 $stmt = $conn->prepare($stats_query);
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$stats_result = $stmt->get_result();
-while($row = $stats_result->fetch_assoc()) {
+$stmt->execute([$student_id]);
+$stats_result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+foreach($stats_result as $row) {
     $attendance_stats[strtolower($row['status'])] = $row['count'];
     $attendance_stats['total'] += $row['count'];
 }
-$stmt->close();
 
 $attendance_rate = $attendance_stats['total'] > 0 
     ? round(($attendance_stats['present'] / $attendance_stats['total']) * 100, 2) 
@@ -831,6 +818,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                     <li><a href="students.php" class="active"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
+                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="reports.php"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
                 </ul>
             </div>
@@ -948,7 +936,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                     </div>
                 </div>
 
-                <?php if($current_enrollment['form_138']): ?>
+                <?php if(!empty($current_enrollment['form_138'])): ?>
                 <div class="info-item" style="margin-top: 15px;">
                     <div class="info-label">Form 138</div>
                     <div class="info-value">
@@ -959,73 +947,20 @@ $attendance_rate = $attendance_stats['total'] > 0
                     </div>
                 </div>
                 <?php endif; ?>
-            </div>
-            <?php endif; ?>
-
-            <!-- Attendance Statistics -->
-            <div class="detail-card">
-                <div class="card-header">
-                    <h3><i class="fas fa-calendar-check"></i> Attendance Overview</h3>
-                    <a href="attendance.php?student=<?php echo $student_id; ?>" class="view-link">
-                        View All <i class="fas fa-arrow-right"></i>
-                    </a>
-                </div>
-
-                <div class="stats-grid">
-                    <div class="stat-card present">
-                        <div class="stat-number"><?php echo $attendance_stats['present']; ?></div>
-                        <div class="stat-label">Present</div>
+                
+                <?php if(!empty($current_enrollment['form_137'])): ?>
+                <div class="info-item" style="margin-top: 15px;">
+                    <div class="info-label">Form 137</div>
+                    <div class="info-value">
+                        <i class="fas fa-file-pdf"></i>
+                        <a href="../<?php echo $current_enrollment['form_137']; ?>" target="_blank" style="color: #0B4F2E; text-decoration: none;">
+                            View Document
+                        </a>
                     </div>
-                    <div class="stat-card absent">
-                        <div class="stat-number"><?php echo $attendance_stats['absent']; ?></div>
-                        <div class="stat-label">Absent</div>
-                    </div>
-                    <div class="stat-card late">
-                        <div class="stat-number"><?php echo $attendance_stats['late']; ?></div>
-                        <div class="stat-label">Late</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number"><?php echo $attendance_rate; ?>%</div>
-                        <div class="stat-label">Rate</div>
-                    </div>
-                </div>
-
-                <?php if($attendance && $attendance->num_rows > 0): ?>
-                <div class="table-container">
-                    <table class="attendance-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>Subject</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php 
-                            $count = 0;
-                            while($row = $attendance->fetch_assoc()): 
-                                if($count++ >= 5) break;
-                            ?>
-                                <tr>
-                                    <td><?php echo date('M d, Y', strtotime($row['date'])); ?></td>
-                                    <td><?php echo htmlspecialchars($row['subject_name']); ?></td>
-                                    <td>
-                                        <span class="badge badge-<?php echo strtolower($row['status']); ?>">
-                                            <?php echo $row['status']; ?>
-                                        </span>
-                                    </td>
-                                </tr>
-                            <?php endwhile; ?>
-                        </tbody>
-                    </table>
-                </div>
-                <?php else: ?>
-                <div class="no-data" style="padding: 20px;">
-                    <i class="fas fa-calendar-times"></i>
-                    <p>No attendance records found.</p>
                 </div>
                 <?php endif; ?>
             </div>
+            <?php endif; ?>
 
             <!-- Enrollment History -->
             <div class="detail-card">
@@ -1033,7 +968,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                     <h3><i class="fas fa-history"></i> Enrollment History</h3>
                 </div>
 
-                <?php if($enrollments && $enrollments->num_rows > 0): ?>
+                <?php if(count($enrollments) > 0): ?>
                 <div class="table-container">
                     <table class="enrollments-table">
                         <thead>
@@ -1047,7 +982,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                             </tr>
                         </thead>
                         <tbody>
-                            <?php while($row = $enrollments->fetch_assoc()): ?>
+                            <?php foreach($enrollments as $row): ?>
                                 <tr>
                                     <td><?php echo htmlspecialchars($row['school_year']); ?></td>
                                     <td><?php echo htmlspecialchars($row['grade_name']); ?></td>
@@ -1056,7 +991,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                                         <?php if($row['strand']): ?>
                                             <span class="strand-tag"><?php echo $row['strand']; ?></span>
                                         <?php endif; ?>
-                                    </td>
+                                                                        </td>
                                     <td>
                                         <span class="badge badge-<?php echo strtolower($row['status']); ?>">
                                             <?php echo $row['status']; ?>
@@ -1069,7 +1004,7 @@ $attendance_rate = $attendance_stats['total'] > 0
                                         </a>
                                     </td>
                                 </tr>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>

@@ -23,30 +23,6 @@ if(isset($_POST['login'])){
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if(password_verify($password, $user['password'])){
-<<<<<<< HEAD
-            // Check if account is approved
-            if($user['is_approved'] == 0) {
-                $error = "Your account is pending approval from the administrator. Please wait for approval before logging in.";
-            } else {
-                $_SESSION['user'] = $user;
-
-                // Redirect based on role
-                switch($user['role']){
-                    case 'Admin':
-                        header("Location: ../admin/dashboard.php");
-                        break;
-                    case 'Registrar':
-                        header("Location: ../registrar/enrollments.php");
-                        break;
-                    case 'Teacher':
-                        header("Location: ../teacher/dashboard.php");
-                        break;
-                    case 'Student':
-                        header("Location: ../student/dashboard.php");
-                        break;
-                }
-                exit();
-=======
             
             // Check user status
             if($user['status'] == 'pending') {
@@ -133,7 +109,7 @@ if(isset($_POST['login'])){
                             header("Location: ../admin/dashboard.php");
                             break;
                         case 'Registrar':
-                            header("Location: ../registrar/enrollments.php");
+                            header("Location: ../registrar/dashboard.php");
                             break;
                         case 'Teacher':
                             header("Location: ../teacher/dashboard.php");
@@ -141,12 +117,14 @@ if(isset($_POST['login'])){
                         case 'Student':
                             header("Location: ../student/dashboard.php");
                             break;
+                        default:
+                            header("Location: ../student/dashboard.php");
+                            break;
                     }
                     exit();
                 }
             } else {
                 $error = "Account status unknown. Please contact administrator.";
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
             }
         } else {
             $error = "Incorrect password!";
@@ -162,9 +140,11 @@ if(isset($_POST['login'])){
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Placido L. Señor Senior High School</title>
+    <title>Login - EnrollSys | Placido L. Señor National High School</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -173,28 +153,32 @@ if(isset($_POST['login'])){
         }
 
         body {
-            font-family: 'Segoe UI', Arial, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #0B4F2E 0%, #1a7a42 100%);
             min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            margin: 0;
             padding: 20px;
         }
 
-        .login-container {
-            background: #ffffff;
+        /* Main Container */
+        .login-wrapper {
+            max-width: 1100px;
             width: 100%;
-            max-width: 1000px;
-            display: flex;
-            border-radius: 20px;
-            overflow: hidden;
-            box-shadow: 0 25px 50px rgba(0, 0, 0, 0.2);
-            animation: slideUp 0.6s ease;
+            margin: 0 auto;
         }
 
-        @keyframes slideUp {
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+            display: flex;
+            animation: fadeInUp 0.6s ease;
+        }
+
+        @keyframes fadeInUp {
             from {
                 opacity: 0;
                 transform: translateY(30px);
@@ -205,6 +189,7 @@ if(isset($_POST['login'])){
             }
         }
 
+        /* Left Panel - Login Form */
         .login-panel {
             flex: 1;
             padding: 50px 40px;
@@ -212,52 +197,94 @@ if(isset($_POST['login'])){
         }
 
         .logo-section {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 40px;
+            text-align: center;
+            margin-bottom: 30px;
         }
 
         .school-logo {
-            width: 70px;
-            height: 70px;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
-            border-radius: 50%;
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 15px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-size: 32px;
-            font-weight: bold;
-            box-shadow: 0 5px 15px rgba(11, 79, 46, 0.3);
+        }
+
+        .school-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 50%;
         }
 
         .school-name h1 {
-            font-size: 22px;
+            font-size: 20px;
             color: #0B4F2E;
-            line-height: 1.3;
-            font-weight: 600;
+            margin-bottom: 5px;
         }
 
         .school-name p {
-            font-size: 13px;
+            font-size: 12px;
             color: #666;
-            margin-top: 5px;
         }
 
         h2 {
             font-size: 28px;
             color: #333;
             margin-bottom: 10px;
-            font-weight: 500;
+            text-align: center;
+        }
+
+        .highlight {
+            color: #0B4F2E;
         }
 
         .subtitle {
             color: #666;
             margin-bottom: 30px;
-            font-size: 15px;
+            text-align: center;
+            font-size: 14px;
         }
 
+        /* Alert Messages */
+        .alert {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #dc2626;
+            border-left: 4px solid #dc2626;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .alert i {
+            font-size: 18px;
+        }
+
+        /* Form Styles */
         .input-group {
             margin-bottom: 25px;
         }
@@ -266,27 +293,57 @@ if(isset($_POST['login'])){
             display: block;
             margin-bottom: 8px;
             color: #555;
-            font-weight: 500;
+            font-weight: 600;
             font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
         }
 
-        .input-group input {
+        .input-group label span {
+            color: #dc3545;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-wrapper input {
             width: 100%;
-            padding: 15px 18px;
+            padding: 14px 45px 14px 16px;
             border: 2px solid #e0e0e0;
-            border-radius: 12px;
+            border-radius: 10px;
             font-size: 15px;
             transition: all 0.3s;
-            background-color: #f8f9fa;
+            background: #f8f9fa;
         }
 
-        .input-group input:focus {
+        .input-wrapper input:focus {
             border-color: #0B4F2E;
-            background-color: #ffffff;
             outline: none;
-            box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(11, 79, 46, 0.1);
+        }
+
+        .input-icon {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #999;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #999;
+            font-size: 16px;
+        }
+
+        .toggle-password:hover {
+            color: #0B4F2E;
         }
 
         .remember-me {
@@ -311,22 +368,19 @@ if(isset($_POST['login'])){
 
         .btn-login {
             width: 100%;
-            background-color: #0B4F2E;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             color: white;
-            padding: 16px;
+            padding: 14px;
             border: none;
-            border-radius: 12px;
+            border-radius: 10px;
             font-size: 16px;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 1px;
             cursor: pointer;
             transition: all 0.3s;
             margin: 20px 0 15px;
         }
 
         .btn-login:hover {
-            background-color: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -335,60 +389,95 @@ if(isset($_POST['login'])){
             text-align: center;
             margin: 20px 0;
             color: #666;
-            font-size: 15px;
+            font-size: 14px;
         }
 
         .signup-link a {
             color: #0B4F2E;
             text-decoration: none;
             font-weight: 600;
-            margin-left: 5px;
         }
 
         .signup-link a:hover {
             text-decoration: underline;
         }
 
+        .back-home {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #666;
+            text-decoration: none;
+            font-size: 14px;
+            transition: color 0.3s;
+        }
+
+        .back-home:hover {
+            color: #0B4F2E;
+        }
+
+        .form-footer {
+            text-align: center;
+            margin-top: 15px;
+        }
+
+        /* Right Panel - Info Panel */
         .info-panel {
             flex: 1;
-            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
+            background: linear-gradient(135deg, #169e5dff, #1a7a42);
             padding: 50px 40px;
             color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .info-panel::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 70%);
+            transform: rotate(45deg);
         }
 
         .motto {
             text-align: center;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
+            position: relative;
+            z-index: 1;
         }
 
         .motto h3 {
-            font-size: 32px;
+            font-size: 28px;
             font-weight: 300;
-            letter-spacing: 6px;
+            letter-spacing: 4px;
             text-transform: uppercase;
             line-height: 1.4;
         }
 
         .motto h3 span {
             display: block;
-            font-size: 26px;
-            letter-spacing: 3px;
+            font-size: 22px;
+            letter-spacing: 2px;
         }
 
         .school-level {
             text-align: center;
-            margin: 25px 0 20px;
-            padding: 15px;
+            margin: 30px 0 20px;
+            padding: 20px;
             background: rgba(255, 255, 255, 0.1);
             border-radius: 12px;
             border: 1px solid rgba(255, 255, 255, 0.2);
+            position: relative;
+            z-index: 1;
         }
 
         .school-level h4 {
-            font-size: 22px;
+            font-size: 20px;
             margin-bottom: 5px;
             color: #FFD700;
-            font-weight: 600;
         }
 
         .school-level p {
@@ -399,42 +488,24 @@ if(isset($_POST['login'])){
         .programs-list {
             list-style: none;
             margin: 25px 0;
+            position: relative;
+            z-index: 1;
         }
 
         .programs-list li {
-            padding: 12px 0;
+            padding: 10px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            font-size: 14px;
+            font-size: 13px;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
         }
 
         .programs-list li::before {
-            content: "→";
-            font-size: 18px;
+            content: "✓";
+            font-size: 14px;
             opacity: 0.8;
             color: #FFD700;
-        }
-
-        .junior-high {
-            margin: 25px 0;
-            padding: 12px 15px;
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 10px;
-            text-align: center;
-            border: 1px solid rgba(255, 255, 255, 0.15);
-        }
-
-        .junior-high h4 {
-            font-size: 18px;
-            margin-bottom: 5px;
-            color: #FFD700;
-        }
-
-        .junior-high p {
-            font-size: 12px;
-            opacity: 0.8;
         }
 
         .address {
@@ -442,157 +513,172 @@ if(isset($_POST['login'])){
             text-align: center;
             font-size: 12px;
             opacity: 0.8;
-            line-height: 1.8;
-            padding: 15px;
+            line-height: 1.6;
+            padding-top: 20px;
             border-top: 1px solid rgba(255, 255, 255, 0.2);
-            font-style: italic;
+            position: relative;
+            z-index: 1;
         }
 
-        .error-message {
-            background-color: #fee2e2;
-            color: #dc2626;
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            border-left: 4px solid #dc2626;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .success-message {
-            background-color: #dcfce7;
-            color: #16a34a;
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            border-left: 4px solid #22c55e;
-        }
-
+        /* Responsive */
         @media (max-width: 768px) {
             .login-container {
                 flex-direction: column;
-                max-width: 450px;
             }
             
+            .login-panel,
             .info-panel {
                 padding: 30px 20px;
-            }
-            
-            .motto h3 {
-                font-size: 28px;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .login-panel {
-                padding: 30px 20px;
-            }
-            
-            .logo-section {
-                flex-direction: column;
-                text-align: center;
             }
             
             h2 {
                 font-size: 24px;
             }
+            
+            .motto h3 {
+                font-size: 24px;
+            }
+            
+            .school-logo {
+                width: 80px;
+                height: 80px;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="login-container">
-        <!-- Left Panel - Login Form -->
-        <div class="login-panel">
-            <div class="logo-section">
-                <div class="school-logo">
-                    <span>PNHS</span>
+    <div class="login-wrapper">
+        <div class="login-container">
+            <!-- Left Panel - Login Form -->
+            <div class="login-panel">
+                <div class="logo-section">
+                    <div class="school-logo">
+                        <img src="../pictures/logo sa skwelahan.jpg" alt="School Logo" onerror="this.onerror=null; this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ccircle cx=%2250%22 cy=%2250%22 r=%2245%22 fill=%22%230B4F2E%22 /%3E%3Ctext x=%2250%22 y=%2265%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2230%22 font-weight=%22bold%22%3EPLS%3C/text%3E%3C/svg%3E';">
+                    </div>
+                    <div class="school-name">
+                        <h1>Placido L. Señor</h1>
+                        <p>National High School</p>
+                    </div>
                 </div>
-                <div class="school-name">
-                    <h1>Placido L. Señor<br>Senior High School</h1>
-                    <p>Excellence • Service • Virtue</p>
-                </div>
-            </div>
+                
+                <?php if(!empty($error)): ?>
+                    <div class="alert alert-error">
+                        <i class="fas fa-exclamation-circle"></i> 
+                        <?php echo htmlspecialchars($error); ?>
+                    </div>
+                <?php endif; ?>
+                
+                <?php if(isset($_GET['registered'])): ?>
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i> 
+                        Registration successful! Please wait for admin approval.
+                    </div>
+                <?php endif; ?>
 
-            <h2>Login to your Account</h2>
-            <p class="subtitle">Enter your credentials to access the system</p>
-            
-            <?php if(!empty($error)): ?>
-                <div class="error-message">
-                    <i class="fas fa-exclamation-circle"></i> <?php echo $error; ?>
-                </div>
-            <?php endif; ?>
-            
-            <?php if(isset($_GET['registered'])): ?>
-                <div class="success-message">
-                    <i class="fas fa-check-circle"></i> Registration successful! Please wait for admin approval.
-                </div>
-            <?php endif; ?>
+                <?php if(isset($_GET['pending'])): ?>
+                    <div class="alert alert-success">
+                        <i class="fas fa-info-circle"></i> 
+                        Your account is pending approval. You will be notified once approved.
+                    </div>
+                <?php endif; ?>
 
-            <form method="POST" action="">
-                <div class="input-group">
-                    <label for="email">Email Address</label>
-                    <input type="email" id="email" name="email" placeholder="Enter your email address" required>
+                <form method="POST" action="">
+                    <div class="input-group">
+                        <label for="email">Email Address <span>*</span></label>
+                        <div class="input-wrapper">
+                            <input type="email" id="email" name="email" placeholder="Enter your email address" required>
+                            <i class="fas fa-envelope input-icon"></i>
+                        </div>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="password">Password <span>*</span></label>
+                        <div class="input-wrapper">
+                            <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                            <button type="button" class="toggle-password" onclick="togglePassword()">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="remember-me">
+                        <input type="checkbox" id="remember" name="remember">
+                        <label for="remember">Remember me</label>
+                    </div>
+                    
+                    <button type="submit" name="login" class="btn-login">
+                        <i class="fas fa-sign-in-alt" style="margin-right: 8px;"></i> LOGIN
+                    </button>
+                </form>
+                
+                <div class="signup-link">
+                    Don't have an account? <a href="register.php">Create Account</a>
+                </div>
+
+                <div class="form-footer">
+                    <a href="../index.php" class="back-home">
+                        <i class="fas fa-arrow-left"></i> Back to Home
+                    </a>
+                </div>
+            </div>
+            
+            <!-- Right Panel - Information -->
+            <div class="info-panel">
+                <div class="motto">
+                    <h3>VIRTUS<br><span>EXCELLENTIA</span><br>SERVITIUM</h3>
                 </div>
                 
-                <div class="input-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                <div class="school-level">
+                    <h4>NATIONAL HIGH SCHOOL</h4>
+                    <p>Grades 11-12 · Academic & Technical-Vocational Tracks</p>
                 </div>
                 
-                <div class="remember-me">
-                    <input type="checkbox" id="remember" name="remember">
-                    <label for="remember">Remember me</label>
-                </div>
+                <ul class="programs-list">
+                    <li><strong>STEM</strong> - Science, Technology, Engineering, Mathematics</li>
+                    <li><strong>ABM</strong> - Accountancy, Business, Management</li>
+                    <li><strong>HUMSS</strong> - Humanities and Social Sciences</li>
+                    <li><strong>GAS</strong> - General Academic Strand</li>
+                    <li><strong>ICT</strong> - Information and Communications Technology</li>
+                    <li><strong>HE</strong> - Home Economics</li>
+                    <li><strong>IA</strong> - Industrial Arts</li>
+                </ul>
                 
-                <button type="submit" name="login" class="btn-login">
-                    LOG IN
-                </button>
-            </form>
-            
-            <div class="signup-link">
-                Don't have an account?
-                <a href="register.php">Sign Up</a>
-            </div>
-        </div>
-        
-        <!-- Right Panel - High School Programs -->
-        <div class="info-panel">
-            <div class="motto">
-                <h3>VIRTUS<br><span>EXCELLENTIA</span><br>SERVITIUM</h3>
-            </div>
-            
-            <div class="school-level">
-                <h4>SENIOR HIGH SCHOOL</h4>
-                <p>Grades 11-12 · Academic Tracks</p>
-            </div>
-            
-            <ul class="programs-list">
-                <li><strong>ACADEMIC TRACK - STEM</strong> - Science, Technology, Engineering, and Mathematics</li>
-                <li><strong>ACADEMIC TRACK - ABM</strong> - Accountancy, Business, and Management</li>
-                <li><strong>ACADEMIC TRACK - HUMSS</strong> - Humanities and Social Sciences</li>
-                <li><strong>ACADEMIC TRACK - GAS</strong> - General Academic Strand</li>
-                <li><strong>TECHNICAL-VOCATIONAL - ICT</strong> - Information and Communications Technology</li>
-                <li><strong>TECHNICAL-VOCATIONAL - HE</strong> - Home Economics</li>
-                <li><strong>TECHNICAL-VOCATIONAL - IA</strong> - Industrial Arts</li>
-            </ul>
-            
-            <div class="junior-high">
-                <h4>JUNIOR HIGH SCHOOL</h4>
-                <p>Grades 7-10 · Basic Education Curriculum</p>
-            </div>
-            
-            <div class="address">
-                PLACIDO L. SEÑOR SENIOR HIGH SCHOOL<br>
-                Langtad, City of Naga, Cebu<br>
-                📞 (032) 123-4567 · 📧 info@plsshs.edu.ph
+                <div class="address">
+                    <i class="fas fa-map-marker-alt" style="margin-right: 5px;"></i> Langtad, City of Naga, Cebu<br>
+                    <i class="fas fa-phone"></i> (032) 123-4567<br>
+                    <i class="fas fa-envelope"></i> info@plsshs.edu.ph
+                </div>
             </div>
         </div>
     </div>
-    
-    <!-- Font Awesome -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
+
+    <script>
+        // Toggle password visibility
+        function togglePassword() {
+            const passwordInput = document.getElementById('password');
+            const toggleBtn = document.querySelector('.toggle-password i');
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleBtn.className = 'fas fa-eye-slash';
+            } else {
+                passwordInput.type = 'password';
+                toggleBtn.className = 'fas fa-eye';
+            }
+        }
+
+        // Auto-hide alerts after 5 seconds
+        setTimeout(function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.opacity = '0';
+                    setTimeout(() => {
+                        if(alert.parentNode) alert.remove();
+                    }, 300);
+                }, 5000);
+            });
+        });
+    </script>
 </body>
 </html>

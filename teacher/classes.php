@@ -1,6 +1,6 @@
 <?php
 session_start();
-include("../config/database.php");
+require_once("../config/database.php");
 
 // Check if user is teacher
 if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Teacher'){
@@ -24,7 +24,7 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Get teacher's sections (where they are adviser)
+// Get teacher's sections (where they are adviser) - FIXED: Using PDO
 $sections_query = "
     SELECT s.*, 
            g.grade_name,
@@ -33,17 +33,15 @@ $sections_query = "
             WHERE e.grade_id = s.grade_id AND e.status = 'Enrolled') as student_count
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
-    WHERE s.adviser_id = ?
+    WHERE s.adviser_id = :teacher_id
     ORDER BY g.id, s.section_name
 ";
 
 $stmt = $conn->prepare($sections_query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$sections = $stmt->get_result();
-$stmt->close();
+$stmt->execute([':teacher_id' => $teacher_id]);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get teacher's subjects
+// Get teacher's subjects - FIXED: Using PDO
 $subjects_query = "
     SELECT sub.*, 
            g.grade_name,
@@ -53,7 +51,8 @@ $subjects_query = "
     ORDER BY g.id, sub.subject_name
 ";
 
-$subjects = $conn->query($subjects_query);
+$subjects_stmt = $conn->query($subjects_query);
+$subjects = $subjects_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get teacher's schedule (if you have a schedules table)
 // For now, we'll create a sample schedule based on sections
@@ -69,27 +68,28 @@ $time_slots = [
     '3:00 PM - 4:00 PM'
 ];
 
-// Get students per section (for quick view)
+// Get students per section (for quick view) - FIXED: Using PDO
 $section_students = [];
-if($sections && $sections->num_rows > 0) {
-    $sections->data_seek(0);
-    while($section = $sections->fetch_assoc()) {
+if(!empty($sections)) {
+    foreach($sections as $section) {
         $student_query = "
             SELECT u.id, u.fullname, u.id_number, e.status
             FROM users u
             JOIN enrollments e ON u.id = e.student_id
-            WHERE e.grade_id = ? AND e.status = 'Enrolled'
+            WHERE e.grade_id = :grade_id AND e.status = 'Enrolled'
             ORDER BY u.fullname
             LIMIT 5
         ";
         $stmt = $conn->prepare($student_query);
-        $stmt->bind_param("i", $section['grade_id']);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $section_students[$section['id']] = $result->fetch_all(MYSQLI_ASSOC);
-        $stmt->close();
+        $stmt->execute([':grade_id' => $section['grade_id']]);
+        $section_students[$section['id']] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
-    $sections->data_seek(0);
+}
+
+// Calculate total students
+$total_students = 0;
+foreach($sections as $section) {
+    $total_students += $section['student_count'];
 }
 ?>
 
@@ -98,7 +98,7 @@ if($sections && $sections->num_rows > 0) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Placido L. Señor Senior High School</title>
+    <title>My Classes - Placido L. Señor Senior High School</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -457,6 +457,7 @@ if($sections && $sections->num_rows > 0) {
             transition: all 0.3s;
             border: 2px solid transparent;
             box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            cursor: pointer;
         }
 
         .section-tab:hover {
@@ -742,6 +743,14 @@ if($sections && $sections->num_rows > 0) {
             text-align: center;
         }
 
+        .tab-content {
+            display: block;
+        }
+
+        .tab-content.hidden {
+            display: none;
+        }
+
         /* Responsive */
         @media (max-width: 1200px) {
             .schedule-grid {
@@ -826,7 +835,7 @@ if($sections && $sections->num_rows > 0) {
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance</span></a></li>
                     <li><a href="classes.php" class="active"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -850,6 +859,20 @@ if($sections && $sections->num_rows > 0) {
                 <p>Manage your advisory classes and subjects</p>
             </div>
 
+            <?php if($success_message): ?>
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i>
+                    <?php echo htmlspecialchars($success_message); ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if($error_message): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <?php echo htmlspecialchars($error_message); ?>
+                </div>
+            <?php endif; ?>
+
             <!-- Statistics -->
             <div class="stats-container">
                 <div class="stat-card">
@@ -859,7 +882,7 @@ if($sections && $sections->num_rows > 0) {
                             <i class="fas fa-layer-group"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $sections ? $sections->num_rows : 0; ?></div>
+                    <div class="stat-number"><?php echo count($sections); ?></div>
                     <div class="stat-label">Sections handled</div>
                 </div>
 
@@ -870,7 +893,7 @@ if($sections && $sections->num_rows > 0) {
                             <i class="fas fa-book"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $subjects ? $subjects->num_rows : 0; ?></div>
+                    <div class="stat-number"><?php echo count($subjects); ?></div>
                     <div class="stat-label">Subjects taught</div>
                 </div>
 
@@ -881,113 +904,97 @@ if($sections && $sections->num_rows > 0) {
                             <i class="fas fa-user-graduate"></i>
                         </div>
                     </div>
-                    <div class="stat-number">
-                        <?php 
-                        $total_students = 0;
-                        if($sections) {
-                            $sections->data_seek(0);
-                            while($section = $sections->fetch_assoc()) {
-                                $total_students += $section['student_count'];
-                            }
-                            $sections->data_seek(0);
-                        }
-                        echo $total_students;
-                        ?>
-                    </div>
+                    <div class="stat-number"><?php echo $total_students; ?></div>
                     <div class="stat-label">Under your advisory</div>
                 </div>
             </div>
 
             <!-- Section Tabs -->
             <div class="section-tabs">
-                <a href="#advisory" class="section-tab active">
+                <div class="section-tab active" data-tab="advisory">
                     <i class="fas fa-star"></i> Advisory Classes
-                </a>
-                <a href="#subjects" class="section-tab">
-                    <i class="fas fa-book"></i> Subjects
-                </a>
-                <a href="#schedule" class="section-tab">
+                </div>
+                <div class="section-tab" data-tab="schedule">
                     <i class="fas fa-clock"></i> Schedule
-                </a>
+                </div>
             </div>
 
-            <!-- Advisory Classes -->
-            <div id="advisory" class="classes-grid">
-                <?php if($sections && $sections->num_rows > 0): ?>
-                    <?php while($section = $sections->fetch_assoc()): ?>
-                        <div class="class-card">
-                            <div class="class-header">
-                                <h3>
-                                    <i class="fas fa-users"></i>
-                                    <?php echo htmlspecialchars($section['section_name']); ?>
-                                </h3>
-                                <span class="class-badge">Adviser</span>
-                            </div>
-                            <div class="class-body">
-                                <div class="class-info">
-                                    <div class="class-info-item">
-                                        <div class="class-info-value"><?php echo $section['grade_name']; ?></div>
-                                        <div class="class-info-label">Grade Level</div>
-                                    </div>
-                                    <div class="class-info-item">
-                                        <div class="class-info-value"><?php echo $section['student_count']; ?></div>
-                                        <div class="class-info-label">Students</div>
-                                    </div>
-                                </div>
-
-                                <div class="student-list">
-                                    <h4 style="font-size: 14px; margin-bottom: 10px; color: var(--text-secondary);">Recent Students</h4>
-                                    <?php if(!empty($section_students[$section['id']])): ?>
-                                        <?php foreach($section_students[$section['id']] as $student): ?>
-                                            <div class="student-item">
-                                                <div class="student-avatar">
-                                                    <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
-                                                </div>
-                                                <div class="student-name"><?php echo htmlspecialchars($student['fullname']); ?></div>
-                                                <div class="student-id"><?php echo $student['id_number'] ?? 'N/A'; ?></div>
-                                            </div>
-                                        <?php endforeach; ?>
-                                        <a href="view_section.php?id=<?php echo $section['id']; ?>" class="view-all-link">
-                                            View all students <i class="fas fa-arrow-right"></i>
-                                        </a>
-                                    <?php else: ?>
-                                        <p style="color: var(--text-secondary); font-size: 13px; text-align: center; padding: 15px;">
-                                            No students enrolled yet
-                                        </p>
-                                    <?php endif; ?>
-                                </div>
-
-                                <div class="class-actions">
-                                    <a href="attendance.php?section=<?php echo $section['id']; ?>" class="class-action-btn btn-attendance">
-                                        <i class="fas fa-calendar-check"></i> Attendance
-                                    </a>
-                                    <a href="grades.php?section=<?php echo $section['id']; ?>" class="class-action-btn btn-grades">
-                                        <i class="fas fa-star"></i> Grades
-                                    </a>
-                                    <a href="view_section.php?id=<?php echo $section['id']; ?>" class="class-action-btn btn-students">
-                                        <i class="fas fa-users"></i> Students
-                                    </a>
-                                    <a href="schedule.php?section=<?php echo $section['id']; ?>" class="class-action-btn btn-schedule">
-                                        <i class="fas fa-clock"></i> Schedule
-                                    </a>
-                                </div>
-                            </div>
-                        </div>
-                    <?php endwhile; ?>
-                <?php else: ?>
-                    <div style="grid-column: 1/-1; text-align: center; padding: 60px; background: white; border-radius: 20px;">
-                        <i class="fas fa-users" style="font-size: 60px; color: var(--text-secondary); opacity: 0.3; margin-bottom: 20px;"></i>
-                        <h3 style="color: var(--text-primary); margin-bottom: 10px;">No Advisory Classes</h3>
-                        <p style="color: var(--text-secondary);">You are not assigned as adviser to any section yet.</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-
-            <!-- Subjects Taught -->
-            <div id="subjects" style="margin-top: 30px; display: none;">
+            <!-- Advisory Classes Tab -->
+            <div id="advisory" class="tab-content">
                 <div class="classes-grid">
-                    <?php if($subjects && $subjects->num_rows > 0): ?>
-                        <?php while($subject = $subjects->fetch_assoc()): ?>
+                    <?php if(!empty($sections)): ?>
+                        <?php foreach($sections as $section): ?>
+                            <div class="class-card">
+                                <div class="class-header">
+                                    <h3>
+                                        <i class="fas fa-users"></i>
+                                        <?php echo htmlspecialchars($section['section_name']); ?>
+                                    </h3>
+                                    <span class="class-badge">Adviser</span>
+                                </div>
+                                <div class="class-body">
+                                    <div class="class-info">
+                                        <div class="class-info-item">
+                                            <div class="class-info-value"><?php echo htmlspecialchars($section['grade_name']); ?></div>
+                                            <div class="class-info-label">Grade Level</div>
+                                        </div>
+                                        <div class="class-info-item">
+                                            <div class="class-info-value"><?php echo $section['student_count']; ?></div>
+                                            <div class="class-info-label">Students</div>
+                                        </div>
+                                    </div>
+
+                                    <div class="student-list">
+                                        <h4 style="font-size: 14px; margin-bottom: 10px; color: var(--text-secondary);">Recent Students</h4>
+                                        <?php if(!empty($section_students[$section['id']])): ?>
+                                            <?php foreach($section_students[$section['id']] as $student): ?>
+                                                <div class="student-item">
+                                                    <div class="student-avatar">
+                                                        <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
+                                                    </div>
+                                                    <div class="student-name"><?php echo htmlspecialchars($student['fullname']); ?></div>
+                                                    <div class="student-id"><?php echo $student['id_number'] ?? 'N/A'; ?></div>
+                                                </div>
+                                            <?php endforeach; ?>
+                                            <a href="view_section.php?id=<?php echo $section['id']; ?>" class="view-all-link">
+                                                View all students <i class="fas fa-arrow-right"></i>
+                                            </a>
+                                        <?php else: ?>
+                                            <p style="color: var(--text-secondary); font-size: 13px; text-align: center; padding: 15px;">
+                                                No students enrolled yet
+                                            </p>
+                                        <?php endif; ?>
+                                    </div>
+
+                                    <div class="class-actions">
+                                        <a href="grades.php?section=<?php echo $section['id']; ?>" class="class-action-btn btn-grades">
+                                            <i class="fas fa-star"></i> Grades
+                                        </a>
+                                        <a href="view_section.php?id=<?php echo $section['id']; ?>" class="class-action-btn btn-students">
+                                            <i class="fas fa-users"></i> Students
+                                        </a>
+                                        <a href="schedule.php?section=<?php echo $section['id']; ?>" class="class-action-btn btn-schedule">
+                                            <i class="fas fa-clock"></i> Schedule
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <div style="grid-column: 1/-1; text-align: center; padding: 60px; background: white; border-radius: 20px;">
+                            <i class="fas fa-users" style="font-size: 60px; color: var(--text-secondary); opacity: 0.3; margin-bottom: 20px;"></i>
+                            <h3 style="color: var(--text-primary); margin-bottom: 10px;">No Advisory Classes</h3>
+                            <p style="color: var(--text-secondary);">You are not assigned as adviser to any section yet.</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- Subjects Taught Tab -->
+            <div id="subjects" class="tab-content hidden">
+                <div class="classes-grid">
+                    <?php if(!empty($subjects)): ?>
+                        <?php foreach($subjects as $subject): ?>
                             <div class="class-card">
                                 <div class="class-header" style="background: linear-gradient(135deg, #4a90e2, #6c5ce7);">
                                     <h3>
@@ -998,7 +1005,7 @@ if($sections && $sections->num_rows > 0) {
                                 <div class="class-body">
                                     <div class="class-info">
                                         <div class="class-info-item">
-                                            <div class="class-info-value"><?php echo $subject['grade_name']; ?></div>
+                                            <div class="class-info-value"><?php echo htmlspecialchars($subject['grade_name']); ?></div>
                                             <div class="class-info-label">Grade Level</div>
                                         </div>
                                         <div class="class-info-item">
@@ -1008,16 +1015,13 @@ if($sections && $sections->num_rows > 0) {
                                     </div>
 
                                     <div class="class-actions" style="grid-template-columns: 1fr 1fr;">
-                                        <a href="attendance.php?subject=<?php echo $subject['id']; ?>" class="class-action-btn btn-attendance">
-                                            <i class="fas fa-calendar-check"></i> Attendance
-                                        </a>
                                         <a href="grades.php?subject=<?php echo $subject['id']; ?>" class="class-action-btn btn-grades">
                                             <i class="fas fa-star"></i> Grades
                                         </a>
                                     </div>
                                 </div>
                             </div>
-                        <?php endwhile; ?>
+                        <?php endforeach; ?>
                     <?php else: ?>
                         <div style="grid-column: 1/-1; text-align: center; padding: 60px; background: white; border-radius: 20px;">
                             <i class="fas fa-book" style="font-size: 60px; color: var(--text-secondary); opacity: 0.3; margin-bottom: 20px;"></i>
@@ -1028,8 +1032,8 @@ if($sections && $sections->num_rows > 0) {
                 </div>
             </div>
 
-            <!-- Schedule -->
-            <div id="schedule" style="margin-top: 30px; display: none;">
+            <!-- Schedule Tab -->
+            <div id="schedule" class="tab-content hidden">
                 <div class="schedule-card">
                     <h3><i class="fas fa-calendar-alt"></i> Weekly Schedule</h3>
                     <div class="schedule-grid">
@@ -1082,7 +1086,7 @@ if($sections && $sections->num_rows > 0) {
     <script>
         // Tab switching
         const tabs = document.querySelectorAll('.section-tab');
-        const sections = {
+        const tabContents = {
             'advisory': document.getElementById('advisory'),
             'subjects': document.getElementById('subjects'),
             'schedule': document.getElementById('schedule')
@@ -1098,15 +1102,19 @@ if($sections && $sections->num_rows > 0) {
                 // Add active class to clicked tab
                 this.classList.add('active');
                 
-                // Hide all sections
-                Object.values(sections).forEach(section => {
-                    section.style.display = 'none';
+                // Get the tab to show
+                const target = this.getAttribute('data-tab');
+                
+                // Hide all tab contents
+                Object.values(tabContents).forEach(content => {
+                    if(content) {
+                        content.classList.add('hidden');
+                    }
                 });
                 
-                // Show selected section
-                const target = this.getAttribute('href').substring(1);
-                if(sections[target]) {
-                    sections[target].style.display = 'block';
+                // Show selected tab content
+                if(tabContents[target]) {
+                    tabContents[target].classList.remove('hidden');
                 }
             });
         });

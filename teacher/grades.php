@@ -26,81 +26,111 @@ if(isset($_SESSION['error_message'])) {
 
 // Get teacher's sections (where they are adviser)
 $sections_query = "
-    SELECT s.*, g.grade_name
+    SELECT s.*, g.grade_name, g.id as grade_level_id
     FROM sections s
     JOIN grade_levels g ON s.grade_id = g.id
     WHERE s.adviser_id = ?
     ORDER BY g.id, s.section_name
 ";
 $stmt = $conn->prepare($sections_query);
-$stmt->bind_param("i", $teacher_id);
-$stmt->execute();
-$sections = $stmt->get_result();
-$stmt->close();
-
-// Get teacher's subjects
-$subjects_query = "
-    SELECT sub.*, g.grade_name
-    FROM subjects sub
-    JOIN grade_levels g ON sub.grade_id = g.id
-    ORDER BY g.id, sub.subject_name
-";
-$subjects = $conn->query($subjects_query);
+$stmt->execute([$teacher_id]);
+$sections = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get selected section and subject from URL
 $selected_section = isset($_GET['section_id']) ? $_GET['section_id'] : '';
 $selected_subject = isset($_GET['subject_id']) ? $_GET['subject_id'] : '';
 $selected_quarter = isset($_GET['quarter']) ? $_GET['quarter'] : '1st Quarter';
 
-// Check if grades table exists
-$grades_table_exists = false;
-$table_check = $conn->query("SHOW TABLES LIKE 'grades'");
-if($table_check && $table_check->num_rows > 0) {
-    $grades_table_exists = true;
+// Get section grade level if selected
+$selected_grade_id = null;
+if($selected_section) {
+    foreach($sections as $section) {
+        if($section['id'] == $selected_section) {
+            $selected_grade_id = $section['grade_id'];
+            break;
+        }
+    }
 }
 
-// Get students for selected section
+// Get subjects based on selected grade level
+$subjects = [];
+if($selected_grade_id) {
+    $subjects_query = "
+        SELECT DISTINCT sub.*, g.grade_name
+        FROM subjects sub
+        JOIN class_schedules cs ON sub.id = cs.subject_id
+        JOIN grade_levels g ON sub.grade_id = g.id
+        WHERE cs.teacher_id = ? AND cs.section_id = ?
+        ORDER BY sub.subject_name
+    ";
+    $stmt = $conn->prepare($subjects_query);
+    $stmt->execute([$teacher_id, $selected_section]);
+    $subjects = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// Check if grades table exists
+$grades_table_exists = false;
+try {
+    $table_check = $conn->query("SHOW TABLES LIKE 'grades'");
+    if($table_check && $table_check->rowCount() > 0) {
+        $grades_table_exists = true;
+    }
+} catch(PDOException $e) {
+    $grades_table_exists = false;
+}
+
+// Get students for selected section AND subject
 $students_list = [];
-if($selected_section) {
-    // Get grade_id from section
-    $section_info = $conn->query("SELECT grade_id FROM sections WHERE id = '$selected_section'")->fetch_assoc();
-    if($section_info) {
-        $grade_id = $section_info['grade_id'];
-        
+if($selected_section && $selected_subject && $selected_grade_id) {
+    // Verify that the teacher actually teaches this subject to this section
+    $check_teaching_stmt = $conn->prepare("
+        SELECT id FROM class_schedules 
+        WHERE teacher_id = ? 
+        AND section_id = ? 
+        AND subject_id = ?
+    ");
+    $check_teaching_stmt->execute([$teacher_id, $selected_section, $selected_subject]);
+    $is_teaching = $check_teaching_stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if(count($is_teaching) > 0) {
         // Get enrolled students in this grade level
-        $students_query = $conn->query("
+        $students_stmt = $conn->prepare("
             SELECT u.*, e.id as enrollment_id
             FROM users u
             JOIN enrollments e ON u.id = e.student_id
             WHERE u.role = 'Student' 
-            AND e.grade_id = '$grade_id'
+            AND e.grade_id = ?
             AND e.status = 'Enrolled'
             ORDER BY u.fullname ASC
         ");
+        $students_stmt->execute([$selected_grade_id]);
+        $students_query_result = $students_stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        if($students_query) {
-            while($student = $students_query->fetch_assoc()) {
-                // Check if grade already exists for this student, subject, and quarter
-                $student['grade_recorded'] = false;
-                $student['grade'] = null;
+        foreach($students_query_result as $student) {
+            // Check if grade already exists for this student, subject, and quarter
+            $student['grade_recorded'] = false;
+            $student['grade'] = null;
+            
+            if($grades_table_exists && $selected_subject) {
+                $grade_check_stmt = $conn->prepare("
+                    SELECT * FROM grades 
+                    WHERE student_id = ? 
+                    AND subject_id = ?
+                    AND quarter = ?
+                ");
+                $grade_check_stmt->execute([$student['id'], $selected_subject, $selected_quarter]);
+                $grade_check = $grade_check_stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                if($grades_table_exists && $selected_subject) {
-                    $grade_check = $conn->query("
-                        SELECT * FROM grades 
-                        WHERE student_id = '{$student['id']}' 
-                        AND subject_id = '$selected_subject'
-                        AND quarter = '$selected_quarter'
-                    ");
-                    
-                    if($grade_check && $grade_check->num_rows > 0) {
-                        $student['grade_recorded'] = true;
-                        $student['grade'] = $grade_check->fetch_assoc();
-                    }
+                if(count($grade_check) > 0) {
+                    $student['grade_recorded'] = true;
+                    $student['grade'] = $grade_check[0];
                 }
-                
-                $students_list[] = $student;
             }
+            
+            $students_list[] = $student;
         }
+    } else {
+        $error_message = "You are not authorized to enter grades for this subject and section combination.";
     }
 }
 
@@ -111,60 +141,76 @@ if(isset($_POST['save_grades']) && $grades_table_exists) {
     $quarter = $_POST['quarter'];
     $student_ids = $_POST['student_ids'] ?? [];
     $grades = $_POST['grades'] ?? [];
-    $remarks = $_POST['remarks'] ?? [];
     
-    $conn->begin_transaction();
+    // Verify teacher is authorized to grade this subject and section
+    $check_teaching_stmt = $conn->prepare("
+        SELECT id FROM class_schedules 
+        WHERE teacher_id = ? 
+        AND section_id = ? 
+        AND subject_id = ?
+    ");
+    $check_teaching_stmt->execute([$teacher_id, $section_id, $subject_id]);
+    $is_teaching = $check_teaching_stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    try {
-        foreach($student_ids as $index => $student_id) {
-            $grade_value = $grades[$index] ?? null;
-            $remark = $remarks[$index] ?? '';
+    if(count($is_teaching) == 0) {
+        $error_message = "You are not authorized to enter grades for this subject and section.";
+    } else {
+        try {
+            $conn->beginTransaction();
             
-            // Skip if grade is empty
-            if($grade_value === '' || $grade_value === null) {
-                continue;
-            }
-            
-            // Validate grade range (0-100)
-            if($grade_value < 0 || $grade_value > 100) {
-                throw new Exception("Grade must be between 0 and 100");
-            }
-            
-            // Check if grade already exists
-            $check = $conn->query("
-                SELECT id FROM grades 
-                WHERE student_id = '$student_id' 
-                AND subject_id = '$subject_id'
-                AND quarter = '$quarter'
-            ");
-            
-            if($check && $check->num_rows > 0) {
-                // Update existing grade
-                $grade_id = $check->fetch_assoc()['id'];
-                $update = $conn->query("
-                    UPDATE grades 
-                    SET grade = '$grade_value', remarks = '$remark'
-                    WHERE id = '$grade_id'
+            foreach($student_ids as $index => $student_id) {
+                $grade_value = $grades[$index] ?? null;
+                
+                // Skip if grade is empty
+                if($grade_value === '' || $grade_value === null) {
+                    continue;
+                }
+                
+                // Validate grade range (0-100)
+                if($grade_value < 0 || $grade_value > 100) {
+                    throw new Exception("Grade must be between 0 and 100");
+                }
+                
+                // Check if grade already exists
+                $check_stmt = $conn->prepare("
+                    SELECT id FROM grades 
+                    WHERE student_id = ? 
+                    AND subject_id = ?
+                    AND quarter = ?
                 ");
-            } else {
-                // Insert new grade
-                $insert = $conn->query("
-                    INSERT INTO grades (student_id, subject_id, quarter, grade, remarks, recorded_by)
-                    VALUES ('$student_id', '$subject_id', '$quarter', '$grade_value', '$remark', '$teacher_id')
-                ");
+                $check_stmt->execute([$student_id, $subject_id, $quarter]);
+                $check = $check_stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                if(count($check) > 0) {
+                    // Update existing grade
+                    $grade_id = $check[0]['id'];
+                    $update_stmt = $conn->prepare("
+                        UPDATE grades 
+                        SET grade = ?, teacher_id = ?
+                        WHERE id = ?
+                    ");
+                    $update_stmt->execute([$grade_value, $teacher_id, $grade_id]);
+                } else {
+                    // Insert new grade
+                    $insert_stmt = $conn->prepare("
+                        INSERT INTO grades (student_id, subject_id, quarter, grade, teacher_id)
+                        VALUES (?, ?, ?, ?, ?)
+                    ");
+                    $insert_stmt->execute([$student_id, $subject_id, $quarter, $grade_value, $teacher_id]);
+                }
             }
+            
+            $conn->commit();
+            $success_message = "Grades saved successfully!";
+            
+            // Refresh the page
+            header("Location: grades.php?section_id=$section_id&subject_id=$subject_id&quarter=$quarter&saved=1");
+            exit();
+            
+        } catch (Exception $e) {
+            $conn->rollBack();
+            $error_message = "Error saving grades: " . $e->getMessage();
         }
-        
-        $conn->commit();
-        $success_message = "Grades saved successfully!";
-        
-        // Refresh the page
-        header("Location: grades.php?section_id=$section_id&subject_id=$subject_id&quarter=$quarter&saved=1");
-        exit();
-        
-    } catch (Exception $e) {
-        $conn->rollback();
-        $error_message = "Error saving grades: " . $e->getMessage();
     }
 }
 
@@ -197,7 +243,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Placido L. Señor Senior High School</title>
+    <title>Placido L. Señor Senior High School - Grade Management</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
@@ -369,56 +415,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .dashboard-header p {
             color: var(--text-secondary);
             font-size: 16px;
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: var(--accent);
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -777,8 +773,8 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         }
 
         .grade-input {
-            width: 80px;
-            padding: 8px 12px;
+            width: 100px;
+            padding: 10px 12px;
             border: 2px solid var(--border-color);
             border-radius: 8px;
             font-size: 14px;
@@ -800,38 +796,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
         .grade-input.failing {
             border-color: var(--danger);
             background: rgba(220, 53, 69, 0.05);
-        }
-
-        .remarks-input {
-            width: 100%;
-            padding: 8px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 13px;
-            transition: all 0.3s;
-        }
-
-        .remarks-input:focus {
-            border-color: var(--primary);
-            outline: none;
-        }
-
-        .grade-badge {
-            padding: 3px 8px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 600;
-            display: inline-block;
-        }
-
-        .grade-badge.passing {
-            background: rgba(40, 167, 69, 0.1);
-            color: var(--success);
-        }
-
-        .grade-badge.failing {
-            background: rgba(220, 53, 69, 0.1);
-            color: var(--danger);
         }
 
         .btn-save {
@@ -938,12 +902,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container,
             .stats-panel {
                 grid-template-columns: 1fr;
@@ -986,7 +944,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance</span></a></li>
                     <li><a href="classes.php"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php" class="active"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -1032,13 +990,6 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                 </div>
             <?php endif; ?>
 
-            <?php if(!$grades_table_exists && $selected_section && $selected_subject): ?>
-                <div class="warning-message">
-                    <i class="fas fa-exclamation-triangle"></i>
-                    <strong>Note:</strong> The grades table doesn't exist yet. Please run the SQL script to create the grades table. You can still enter grades, but they won't be saved until the table is created.
-                </div>
-            <?php endif; ?>
-
             <!-- Quick Stats -->
             <div class="stats-container">
                 <div class="stat-card">
@@ -1048,7 +999,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                             <i class="fas fa-layer-group"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $sections ? $sections->num_rows : 0; ?></div>
+                    <div class="stat-number"><?php echo $sections ? count($sections) : 0; ?></div>
                     <div class="stat-label">Classes handling</div>
                 </div>
 
@@ -1059,8 +1010,8 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                             <i class="fas fa-book"></i>
                         </div>
                     </div>
-                    <div class="stat-number"><?php echo $subjects ? $subjects->num_rows : 0; ?></div>
-                    <div class="stat-label">Subjects taught</div>
+                    <div class="stat-number"><?php echo $subjects ? count($subjects) : 0; ?></div>
+                    <div class="stat-label">For selected section</div>
                 </div>
 
                 <div class="stat-card">
@@ -1097,19 +1048,20 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
             <!-- Filter Card -->
             <div class="filter-card">
                 <h3><i class="fas fa-filter"></i> Select Class and Subject</h3>
-                <form method="GET" action="">
+                <form method="GET" action="" id="filterForm">
                     <div class="filter-grid">
                         <div class="filter-group">
                             <label><i class="fas fa-layer-group"></i> Section</label>
-                            <select name="section_id" required>
+                            <select name="section_id" id="section_id" required>
                                 <option value="">Select Section</option>
-                                <?php if($sections && $sections->num_rows > 0): ?>
-                                    <?php while($section = $sections->fetch_assoc()): ?>
+                                <?php if($sections && count($sections) > 0): ?>
+                                    <?php foreach($sections as $section): ?>
                                         <option value="<?php echo $section['id']; ?>" 
+                                            data-grade-id="<?php echo $section['grade_id']; ?>"
                                             <?php echo ($selected_section == $section['id']) ? 'selected' : ''; ?>>
                                             <?php echo htmlspecialchars($section['section_name'] . ' - ' . $section['grade_name']); ?>
                                         </option>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
                                 <?php else: ?>
                                     <option value="">No sections assigned</option>
                                 <?php endif; ?>
@@ -1118,18 +1070,19 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
 
                         <div class="filter-group">
                             <label><i class="fas fa-book"></i> Subject</label>
-                            <select name="subject_id" required>
+                            <select name="subject_id" id="subject_id" required>
                                 <option value="">Select Subject</option>
-                                <?php if($subjects && $subjects->num_rows > 0): ?>
-                                    <?php 
-                                    $subjects->data_seek(0);
-                                    while($subject = $subjects->fetch_assoc()): 
-                                    ?>
+                                <?php if($subjects && count($subjects) > 0): ?>
+                                    <?php foreach($subjects as $subject): ?>
                                         <option value="<?php echo $subject['id']; ?>" 
                                             <?php echo ($selected_subject == $subject['id']) ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($subject['subject_name'] . ' - ' . $subject['grade_name']); ?>
+                                            <?php echo htmlspecialchars($subject['subject_name']); ?>
                                         </option>
-                                    <?php endwhile; ?>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <?php if($selected_section): ?>
+                                        <option value="">No subjects assigned to this section</option>
+                                    <?php endif; ?>
                                 <?php endif; ?>
                             </select>
                         </div>
@@ -1209,8 +1162,7 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                                 <thead>
                                     <tr>
                                         <th>Student</th>
-                                        <th>Grade</th>
-                                        <th>Remarks</th>
+                                        <th>Grade (0-100)</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -1223,9 +1175,10 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                                                     </div>
                                                     <div class="student-details">
                                                         <h4><?php echo htmlspecialchars($student['fullname']); ?></h4>
+                                                        <span>ID: <?php echo $student['id_number'] ?? 'N/A'; ?></span>
                                                     </div>
                                                 </div>
-                                            </td>
+                                            </div>
                                             <td>
                                                 <input type="hidden" name="student_ids[]" value="<?php echo $student['id']; ?>">
                                                 <input type="number" 
@@ -1239,31 +1192,18 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                                                        min="0" 
                                                        max="100" 
                                                        step="0.01"
-                                                       placeholder="0-100"
+                                                       placeholder="Enter grade"
                                                        oninput="validateGrade(this)">
-                                            </td>
-                                            <td>
-                                                <input type="text" 
-                                                       name="remarks[]" 
-                                                       class="remarks-input" 
-                                                       value="<?php echo isset($student['grade']['remarks']) ? htmlspecialchars($student['grade']['remarks']) : ''; ?>"
-                                                       placeholder="Optional remarks">
-                                            </td>
+                                            </div>
                                         </tr>
                                     <?php endforeach; ?>
                                 </tbody>
                             </table>
                         </div>
 
-                        <?php if($grades_table_exists): ?>
-                            <button type="submit" name="save_grades" class="btn-save">
-                                <i class="fas fa-save"></i> Save Grades
-                            </button>
-                        <?php else: ?>
-                            <button type="button" class="btn-save" style="background: #ccc;" disabled>
-                                <i class="fas fa-exclamation-triangle"></i> Grades Table Not Created Yet
-                            </button>
-                        <?php endif; ?>
+                        <button type="submit" name="save_grades" class="btn-save">
+                            <i class="fas fa-save"></i> Save Grades
+                        </button>
                     </form>
                 </div>
             <?php elseif($selected_section && $selected_subject): ?>
@@ -1343,6 +1283,53 @@ $quarters = ['1st Quarter', '2nd Quarter', '3rd Quarter', '4th Quarter'];
                 alert('Please ensure all grades are between 0 and 100');
             }
         });
+
+        // Dynamic subject filtering based on section selection
+        const sectionSelect = document.getElementById('section_id');
+        const subjectSelect = document.getElementById('subject_id');
+        
+        sectionSelect.addEventListener('change', function() {
+            const sectionId = this.value;
+            
+            if (sectionId) {
+                // Show loading state
+                subjectSelect.innerHTML = '<option value="">Loading subjects...</option>';
+                subjectSelect.disabled = true;
+                
+                // Fetch subjects for this section
+                fetch(`get_teacher_subjects.php?section_id=${sectionId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        subjectSelect.innerHTML = '<option value="">Select Subject</option>';
+                        
+                        if (data.length > 0) {
+                            data.forEach(subject => {
+                                const option = document.createElement('option');
+                                option.value = subject.id;
+                                option.textContent = subject.subject_name;
+                                subjectSelect.appendChild(option);
+                            });
+                            subjectSelect.disabled = false;
+                        } else {
+                            subjectSelect.innerHTML = '<option value="">No subjects assigned to this section</option>';
+                            subjectSelect.disabled = true;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        subjectSelect.innerHTML = '<option value="">Error loading subjects</option>';
+                        subjectSelect.disabled = true;
+                    });
+            } else {
+                subjectSelect.innerHTML = '<option value="">Select Subject</option>';
+                subjectSelect.disabled = true;
+            }
+        });
+
+        // Trigger change on page load to load subjects for pre-selected section
+        if (sectionSelect.value) {
+            sectionSelect.dispatchEvent(new Event('change'));
+        }
     </script>
     <?php include('../includes/chatbot_widget_teacher.php'); ?>
 </body>

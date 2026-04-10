@@ -23,41 +23,120 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// Handle status update
+// Function to generate student ID
+function generateStudentID($conn, $grade_level, $school_year) {
+    // Get the year from school year (e.g., 2024-2025 -> 2024)
+    $year = explode('-', $school_year)[0];
+    
+    // Get grade prefix
+    $grade_prefix = '';
+    switch($grade_level) {
+        case 'Grade 7':
+            $grade_prefix = '7';
+            break;
+        case 'Grade 8':
+            $grade_prefix = '8';
+            break;
+        case 'Grade 9':
+            $grade_prefix = '9';
+            break;
+        case 'Grade 10':
+            $grade_prefix = '10';
+            break;
+        case 'Grade 11':
+            $grade_prefix = '11';
+            break;
+        case 'Grade 12':
+            $grade_prefix = '12';
+            break;
+        default:
+            $grade_prefix = '0';
+    }
+    
+    // Find the next sequence number
+    $pattern = "PLSSHS-{$year}-{$grade_prefix}-%";
+    $stmt = $conn->prepare("SELECT id_number FROM users WHERE id_number LIKE ? ORDER BY id_number DESC LIMIT 1");
+    $stmt->execute([$pattern]);
+    $last_id = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if($last_id && $last_id['id_number']) {
+        // Extract the sequence number
+        $parts = explode('-', $last_id['id_number']);
+        $last_seq = intval(end($parts));
+        $new_seq = str_pad($last_seq + 1, 4, '0', STR_PAD_LEFT);
+    } else {
+        $new_seq = '0001';
+    }
+    
+    return "PLSSHS-{$year}-{$grade_prefix}-{$new_seq}";
+}
+
+// Handle status update - APPROVE
 if(isset($_GET['approve'])) {
     $enrollment_id = $_GET['approve'];
-    $update = $conn->query("UPDATE enrollments SET status = 'Enrolled' WHERE id = '$enrollment_id'");
-    if($update) {
-        $success_message = "Enrollment approved successfully!";
+    
+    // Get enrollment details first
+    $stmt = $conn->prepare("
+        SELECT e.*, g.grade_name, e.school_year 
+        FROM enrollments e 
+        JOIN grade_levels g ON e.grade_id = g.id 
+        WHERE e.id = ?
+    ");
+    $stmt->execute([$enrollment_id]);
+    $enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if($enrollment) {
+        // Generate student ID
+        $student_id_number = generateStudentID($conn, $enrollment['grade_name'], $enrollment['school_year']);
+        
+        // Update enrollment status
+        $update = $conn->prepare("UPDATE enrollments SET status = 'Enrolled' WHERE id = ?");
+        $update->execute([$enrollment_id]);
+        
+        // Update user with generated ID number
+        $update_user = $conn->prepare("UPDATE users SET id_number = ? WHERE id = ?");
+        $update_user->execute([$student_id_number, $enrollment['student_id']]);
+        
+        if($update->rowCount() > 0) {
+            $success_message = "Enrollment approved successfully! Student ID: " . $student_id_number;
+        } else {
+            $error_message = "Error approving enrollment.";
+        }
     } else {
-        $error_message = "Error approving enrollment.";
+        $error_message = "Enrollment not found.";
     }
 }
 
+// Handle status update - REJECT
 if(isset($_GET['reject'])) {
     $enrollment_id = $_GET['reject'];
-    $update = $conn->query("UPDATE enrollments SET status = 'Rejected' WHERE id = '$enrollment_id'");
-    if($update) {
+    $update = $conn->prepare("UPDATE enrollments SET status = 'Rejected' WHERE id = ?");
+    $update->execute([$enrollment_id]);
+    if($update->rowCount() > 0) {
         $success_message = "Enrollment rejected.";
     } else {
         $error_message = "Error rejecting enrollment.";
     }
 }
 
+// Handle status update - PENDING
 if(isset($_GET['pending'])) {
     $enrollment_id = $_GET['pending'];
-    $update = $conn->query("UPDATE enrollments SET status = 'Pending' WHERE id = '$enrollment_id'");
-    if($update) {
+    $update = $conn->prepare("UPDATE enrollments SET status = 'Pending' WHERE id = ?");
+    $update->execute([$enrollment_id]);
+    if($update->rowCount() > 0) {
         $success_message = "Enrollment status set to pending.";
     } else {
         $error_message = "Error updating enrollment.";
     }
 }
 
+// Handle delete
 if(isset($_GET['delete'])) {
     $enrollment_id = $_GET['delete'];
-    $delete = $conn->query("DELETE FROM enrollments WHERE id = '$enrollment_id'");
-    if($delete) {
+    $delete = $conn->prepare("DELETE FROM enrollments WHERE id = ?");
+    $delete->execute([$enrollment_id]);
+    if($delete->rowCount() > 0) {
         $success_message = "Enrollment record deleted successfully!";
     } else {
         $error_message = "Error deleting enrollment.";
@@ -70,7 +149,7 @@ $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $strand_filter = isset($_GET['strand']) ? $_GET['strand'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
 
-// Build the query - FIXED: Removed section_id reference
+// Build the query
 $query = "
     SELECT e.*, 
            u.fullname, 
@@ -82,38 +161,53 @@ $query = "
     JOIN grade_levels g ON e.grade_id = g.id
     WHERE 1=1
 ";
+$params = [];
 
 if(!empty($status_filter)) {
-    $query .= " AND e.status = '$status_filter'";
+    $query .= " AND e.status = ?";
+    $params[] = $status_filter;
 }
 
 if(!empty($grade_filter)) {
-    $query .= " AND e.grade_id = '$grade_filter'";
+    $query .= " AND e.grade_id = ?";
+    $params[] = $grade_filter;
 }
 
 if(!empty($strand_filter)) {
-    $query .= " AND e.strand = '$strand_filter'";
+    $query .= " AND e.strand = ?";
+    $params[] = $strand_filter;
 }
 
 if(!empty($search_query)) {
-    $query .= " AND (u.fullname LIKE '%$search_query%' OR u.email LIKE '%$search_query%' OR u.id_number LIKE '%$search_query%')";
+    $query .= " AND (u.fullname LIKE ? OR u.email LIKE ? OR u.id_number LIKE ?)";
+    $search_param = "%$search_query%";
+    $params[] = $search_param;
+    $params[] = $search_param;
+    $params[] = $search_param;
 }
 
 $query .= " ORDER BY e.created_at DESC";
 
-$enrollments = $conn->query($query);
+$enrollments_stmt = $conn->prepare($query);
+$enrollments_stmt->execute($params);
+$enrollments = $enrollments_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get statistics
-$total_enrollments = $conn->query("SELECT COUNT(*) as count FROM enrollments")->fetch_assoc()['count'];
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Pending'")->fetch_assoc()['count'];
-$enrolled_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Enrolled'")->fetch_assoc()['count'];
-$rejected_count = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Rejected'")->fetch_assoc()['count'];
+$total_stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments");
+$total_enrollments = $total_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$pending_stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Pending'");
+$pending_count = $pending_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$enrolled_stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Enrolled'");
+$enrolled_count = $enrolled_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$rejected_stmt = $conn->query("SELECT COUNT(*) as count FROM enrollments WHERE status = 'Rejected'");
+$rejected_count = $rejected_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get grade levels for filter
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
-
-// Get unique strands for filter
-$strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS NOT NULL AND strand != '' ORDER BY strand");
+$grade_levels_stmt = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -812,6 +906,18 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
             border-color: #0B4F2E;
         }
 
+        /* ID Number Display */
+        .id-number-badge {
+            background: #0B4F2E;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 600;
+            display: inline-block;
+            font-family: monospace;
+        }
+
         /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
@@ -903,10 +1009,6 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
             
             <div class="admin-info">
                 <div class="admin-avatar">
@@ -1028,14 +1130,11 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
 
                         <select name="grade" class="filter-select">
                             <option value="">All Grades</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" <?php echo $grade_filter == $grade['id'] ? 'selected' : ''; ?>>
                                     <?php echo $grade['grade_name']; ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
 
                         <select name="strand" class="filter-select">
@@ -1072,7 +1171,7 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
             <div class="table-card">
                 <div class="table-header">
                     <h3><i class="fas fa-file-signature"></i> Enrollment Applications</h3>
-                    <span class="grade-tag">Total: <?php echo $enrollments ? $enrollments->num_rows : 0; ?> records</span>
+                    <span class="grade-tag">Total: <?php echo count($enrollments); ?> records</span>
                 </div>
 
                 <div class="table-container">
@@ -1081,7 +1180,7 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                             <tr>
                                 <th>Student</th>
                                 <th>ID Number</th>
-                                <th>Grade & Strand</th>
+                                <th>Grade</th>
                                 <th>School Year</th>
                                 <th>Form 138</th>
                                 <th>Status</th>
@@ -1090,8 +1189,8 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                             </tr>
                         </thead>
                         <tbody>
-                            <?php if($enrollments && $enrollments->num_rows > 0): ?>
-                                <?php while($enrollment = $enrollments->fetch_assoc()): ?>
+                            <?php if(count($enrollments) > 0): ?>
+                                <?php foreach($enrollments as $enrollment): ?>
                                     <tr>
                                         <td>
                                             <div class="student-info">
@@ -1105,7 +1204,11 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                                             </div>
                                         </td>
                                         <td>
-                                            <span class="grade-tag"><?php echo $enrollment['id_number'] ?? 'N/A'; ?></span>
+                                            <?php if($enrollment['id_number']): ?>
+                                                <span class="id-number-badge"><?php echo $enrollment['id_number']; ?></span>
+                                            <?php else: ?>
+                                                <span class="grade-tag">Not assigned</span>
+                                            <?php endif; ?>
                                         </td>
                                         <td>
                                             <span class="grade-tag"><?php echo htmlspecialchars($enrollment['grade_name']); ?></span>
@@ -1139,14 +1242,14 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                                         <td>
                                             <div class="action-btns">
                                                 <?php if($enrollment['status'] == 'Pending'): ?>
-                                                    <a href="?approve=<?php echo $enrollment['id']; ?>" class="btn-icon btn-approve" title="Approve" onclick="return confirm('Approve this enrollment?')">
+                                                    <a href="?approve=<?php echo $enrollment['id']; ?>" class="btn-icon btn-approve" title="Approve (Generates ID)" onclick="return confirm('Approve this enrollment? This will generate a student ID number.')">
                                                         <i class="fas fa-check-circle"></i>
                                                     </a>
                                                     <a href="?reject=<?php echo $enrollment['id']; ?>" class="btn-icon btn-reject" title="Reject" onclick="return confirm('Reject this enrollment?')">
                                                         <i class="fas fa-times-circle"></i>
                                                     </a>
                                                 <?php elseif($enrollment['status'] == 'Enrolled'): ?>
-                                                    <a href="?pending=<?php echo $enrollment['id']; ?>" class="btn-icon btn-pending" title="Move to Pending" onclick="return confirm('Change status to pending?')">
+                                                    <a href="?pending=<?php echo $enrollment['id']; ?>" class="btn-icon btn-pending" title="Move to Pending" onclick="return confirm('Change status to pending? This will not remove the ID number.')">
                                                         <i class="fas fa-undo-alt"></i>
                                                     </a>
                                                 <?php elseif($enrollment['status'] == 'Rejected'): ?>
@@ -1166,7 +1269,7 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                                             </div>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
                                     <td colspan="8">
@@ -1183,13 +1286,17 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
                 </div>
 
                 <!-- Pagination -->
+                <?php if(count($enrollments) > 0): ?>
                 <div class="pagination">
                     <button class="page-btn active">1</button>
-                    <button class="page-btn">2</button>
-                    <button class="page-btn">3</button>
-                    <button class="page-btn">4</button>
-                    <button class="page-btn">5</button>
+                    <?php 
+                    $total_pages = ceil(count($enrollments) / 10);
+                    for($i = 2; $i <= $total_pages && $i <= 5; $i++): 
+                    ?>
+                        <button class="page-btn"><?php echo $i; ?></button>
+                    <?php endfor; ?>
                 </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -1214,11 +1321,14 @@ $strands = $conn->query("SELECT DISTINCT strand FROM enrollments WHERE strand IS
         });
 
         // Search on Enter key
-        document.querySelector('.search-box input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                this.form.submit();
-            }
-        });
+        const searchInput = document.querySelector('.search-box input');
+        if(searchInput) {
+            searchInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    this.form.submit();
+                }
+            });
+        }
     </script>
 </body>
 </html>

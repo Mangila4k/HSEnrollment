@@ -24,53 +24,29 @@ if(isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-<<<<<<< HEAD
-// Handle approval from manage_accounts page
-if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
-    $approve_id = $_GET['approve'];
-    
-    $stmt = $conn->prepare("UPDATE users SET is_approved = 1 WHERE id = ?");
-    $stmt->bind_param("i", $approve_id);
-=======
 // Handle user approval
 if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
     $user_id = $_GET['approve'];
     
     $stmt = $conn->prepare("UPDATE users SET status = 'approved', approved_by = ?, approved_at = NOW() WHERE id = ?");
-    $stmt->bind_param("ii", $admin_id, $user_id);
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
-    if($stmt->execute()) {
+    if($stmt->execute([$admin_id, $user_id])) {
         $success_message = "User approved successfully!";
     } else {
-        $error_message = "Error approving user: " . $conn->error;
+        $error_message = "Error approving user";
     }
-    $stmt->close();
 }
 
-<<<<<<< HEAD
-// Handle rejection (delete)
-if(isset($_GET['reject']) && is_numeric($_GET['reject'])) {
-    $reject_id = $_GET['reject'];
-    
-    $stmt = $conn->prepare("DELETE FROM users WHERE id = ? AND is_approved = 0");
-    $stmt->bind_param("i", $reject_id);
-    if($stmt->execute()) {
-        $success_message = "User rejected and removed successfully!";
-=======
 // Handle user rejection
 if(isset($_POST['reject_user'])) {
     $user_id = $_POST['user_id'];
-    $reason = mysqli_real_escape_string($conn, $_POST['rejection_reason']);
+    $reason = $_POST['rejection_reason'];
     
     $stmt = $conn->prepare("UPDATE users SET status = 'rejected', rejection_reason = ?, approved_by = ?, approved_at = NOW() WHERE id = ?");
-    $stmt->bind_param("sii", $reason, $admin_id, $user_id);
-    if($stmt->execute()) {
+    if($stmt->execute([$reason, $admin_id, $user_id])) {
         $success_message = "User rejected successfully!";
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
     } else {
-        $error_message = "Error rejecting user: " . $conn->error;
+        $error_message = "Error rejecting user";
     }
-    $stmt->close();
 }
 
 // Handle user deletion
@@ -81,23 +57,28 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     if($delete_id != $_SESSION['user']['id']) {
         
         // Check if user has related records
-        $check_enrollments = $conn->query("SELECT id FROM enrollments WHERE student_id = '$delete_id'");
-        $check_attendance = $conn->query("SELECT id FROM attendance WHERE student_id = '$delete_id'");
-        $check_sections = $conn->query("SELECT id FROM sections WHERE adviser_id = '$delete_id'");
-        $check_teacher_attendance = $conn->query("SELECT id FROM teacher_attendance WHERE teacher_id = '$delete_id'");
+        $check_enrollments = $conn->prepare("SELECT id FROM enrollments WHERE student_id = ?");
+        $check_enrollments->execute([$delete_id]);
         
-        if($check_enrollments->num_rows > 0 || $check_attendance->num_rows > 0 || 
-           $check_sections->num_rows > 0 || $check_teacher_attendance->num_rows > 0) {
+        $check_attendance = $conn->prepare("SELECT id FROM attendance WHERE student_id = ?");
+        $check_attendance->execute([$delete_id]);
+        
+        $check_sections = $conn->prepare("SELECT id FROM sections WHERE adviser_id = ?");
+        $check_sections->execute([$delete_id]);
+        
+        $check_teacher_attendance = $conn->prepare("SELECT id FROM teacher_attendance WHERE teacher_id = ?");
+        $check_teacher_attendance->execute([$delete_id]);
+        
+        if($check_enrollments->rowCount() > 0 || $check_attendance->rowCount() > 0 || 
+           $check_sections->rowCount() > 0 || $check_teacher_attendance->rowCount() > 0) {
             $error_message = "Cannot delete user because they have related records (enrollments, attendance, or sections).";
         } else {
             $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
-            $stmt->bind_param("i", $delete_id);
-            if($stmt->execute()) {
+            if($stmt->execute([$delete_id])) {
                 $success_message = "User deleted successfully!";
             } else {
-                $error_message = "Error deleting user: " . $conn->error;
+                $error_message = "Error deleting user";
             }
-            $stmt->close();
         }
     } else {
         $error_message = "You cannot delete your own account!";
@@ -110,29 +91,25 @@ $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search = isset($_GET['search']) ? $_GET['search'] : '';
 
 // Get pending accounts count
-$pending_count_query = "SELECT COUNT(*) as count FROM users WHERE is_approved = 0";
-$pending_count_result = $conn->query($pending_count_query);
-$pending_count = $pending_count_result->fetch_assoc()['count'];
+$pending_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'");
+$pending_count = $pending_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 // Get pending accounts
-$pending_query = "SELECT * FROM users WHERE is_approved = 0 ORDER BY created_at DESC";
-$pending_users = $conn->query($pending_query);
+$pending_users_stmt = $conn->query("SELECT * FROM users WHERE status = 'pending' ORDER BY created_at DESC");
+$pending_users = $pending_users_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Build query for approved users only
-$query = "SELECT * FROM users WHERE is_approved = 1";
+// Build query for users
+$query = "SELECT * FROM users WHERE 1=1";
 $params = [];
-$types = "";
 
 if(!empty($role_filter)) {
     $query .= " AND role = ?";
     $params[] = $role_filter;
-    $types .= "s";
 }
 
 if(!empty($status_filter)) {
     $query .= " AND status = ?";
     $params[] = $status_filter;
-    $types .= "s";
 }
 
 if(!empty($search)) {
@@ -141,7 +118,6 @@ if(!empty($search)) {
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
-    $types .= "sss";
 }
 
 $query .= " ORDER BY 
@@ -154,28 +130,27 @@ $query .= " ORDER BY
 
 // Prepare and execute
 $stmt = $conn->prepare($query);
-if(!empty($params)) {
-    $stmt->bind_param($types, ...$params);
-}
-$stmt->execute();
-$users = $stmt->get_result();
+$stmt->execute($params);
+$users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-<<<<<<< HEAD
 // Get counts by role (approved users only)
-=======
-// Get counts by role and status
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
 $counts = [];
 $roles = ['Admin', 'Registrar', 'Teacher', 'Student'];
 foreach($roles as $role) {
-    $result = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = '$role' AND is_approved = 1");
-    $counts[$role] = $result->fetch_assoc()['count'];
+    $count_stmt = $conn->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'approved'");
+    $count_stmt->execute([$role]);
+    $counts[$role] = $count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 }
 
 // Get status counts
-$pending_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'")->fetch_assoc()['count'];
-$approved_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'approved'")->fetch_assoc()['count'];
-$rejected_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'rejected'")->fetch_assoc()['count'];
+$pending_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'");
+$pending_count = $pending_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$approved_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'approved'");
+$approved_count = $approved_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+
+$rejected_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'rejected'");
+$rejected_count = $rejected_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 $total_users = array_sum($counts);
 ?>
@@ -523,7 +498,65 @@ $total_users = array_sum($counts);
             font-size: 14px;
         }
 
-<<<<<<< HEAD
+        /* Status Badges */
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .status-pending {
+            background: rgba(255, 193, 7, 0.1);
+            color: #ffc107;
+            border: 1px solid #ffc107;
+        }
+
+        .status-approved {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border: 1px solid #28a745;
+        }
+
+        .status-rejected {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border: 1px solid #dc3545;
+        }
+
+        /* Role Badges */
+        .role-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .role-badge.admin {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .role-badge.registrar {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+
+        .role-badge.teacher {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: white;
+        }
+
+        .role-badge.student {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+        }
+
         /* Pending Section */
         .pending-section {
             background: white;
@@ -595,20 +628,6 @@ $total_users = array_sum($counts);
             background: var(--hover-color);
         }
 
-        .status-badge {
-            padding: 4px 10px;
-            border-radius: 20px;
-            font-size: 11px;
-            font-weight: 600;
-            display: inline-block;
-            text-transform: uppercase;
-        }
-
-        .status-badge.pending {
-            background: #fff3cd;
-            color: #856404;
-        }
-
         .btn-approve {
             background: #28a745;
             color: white;
@@ -622,6 +641,8 @@ $total_users = array_sum($counts);
             gap: 5px;
             transition: all 0.3s;
             margin-right: 5px;
+            border: none;
+            cursor: pointer;
         }
 
         .btn-approve:hover {
@@ -641,6 +662,8 @@ $total_users = array_sum($counts);
             align-items: center;
             gap: 5px;
             transition: all 0.3s;
+            border: none;
+            cursor: pointer;
         }
 
         .btn-reject:hover {
@@ -658,65 +681,6 @@ $total_users = array_sum($counts);
             font-size: 40px;
             margin-bottom: 10px;
             opacity: 0.3;
-=======
-        /* Status Badges */
-        .status-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            display: inline-block;
-            text-align: center;
-        }
-
-        .status-pending {
-            background: rgba(255, 193, 7, 0.1);
-            color: #ffc107;
-            border: 1px solid #ffc107;
-        }
-
-        .status-approved {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
-            border: 1px solid #28a745;
-        }
-
-        .status-rejected {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-            border: 1px solid #dc3545;
-        }
-
-        /* Role Badges */
-        .role-badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            display: inline-block;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .role-badge.admin {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            color: white;
-        }
-
-        .role-badge.registrar {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            color: white;
-        }
-
-        .role-badge.teacher {
-            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-            color: white;
-        }
-
-        .role-badge.student {
-            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-            color: white;
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
         }
 
         /* Section Title */
@@ -910,7 +874,7 @@ $total_users = array_sum($counts);
             flex-wrap: wrap;
         }
 
-        .btn-view, .btn-edit, .btn-delete, .btn-approve, .btn-reject {
+        .btn-view, .btn-edit, .btn-delete {
             padding: 8px 12px;
             border-radius: 8px;
             font-size: 12px;
@@ -952,28 +916,6 @@ $total_users = array_sum($counts);
         }
 
         .btn-delete:hover {
-            background: var(--danger);
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        .btn-approve {
-            background: rgba(40, 167, 69, 0.1);
-            color: var(--success);
-        }
-
-        .btn-approve:hover {
-            background: var(--success);
-            color: white;
-            transform: translateY(-2px);
-        }
-
-        .btn-reject {
-            background: rgba(220, 53, 69, 0.1);
-            color: var(--danger);
-        }
-
-        .btn-reject:hover {
             background: var(--danger);
             color: white;
             transform: translateY(-2px);
@@ -1054,6 +996,7 @@ $total_users = array_sum($counts);
             border-radius: 8px;
             min-height: 100px;
             font-family: inherit;
+            margin-top: 10px;
         }
 
         .modal-footer {
@@ -1082,6 +1025,11 @@ $total_users = array_sum($counts);
             border-radius: 8px;
             font-weight: 600;
             cursor: pointer;
+        }
+
+        .activity-time {
+            font-size: 12px;
+            color: var(--text-secondary);
         }
 
         /* Responsive */
@@ -1127,12 +1075,6 @@ $total_users = array_sum($counts);
                 align-items: flex-start;
             }
             
-            .welcome-card {
-                flex-direction: column;
-                text-align: center;
-                gap: 20px;
-            }
-            
             .stats-container {
                 grid-template-columns: 1fr;
             }
@@ -1150,11 +1092,6 @@ $total_users = array_sum($counts);
             
             .action-btns {
                 justify-content: center;
-            }
-<<<<<<< HEAD
-            
-            .data-table td {
-                font-size: 13px;
             }
             
             .pending-header {
@@ -1175,8 +1112,6 @@ $total_users = array_sum($counts);
                 padding: 4px 8px;
                 font-size: 10px;
             }
-=======
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
         }
     </style>
 </head>
@@ -1184,11 +1119,6 @@ $total_users = array_sum($counts);
     <div class="app-container">
         <!-- Sidebar -->
         <div class="sidebar">
-            <h2>
-                <i class="fas fa-check-circle"></i>
-                <span>PNHS</span>
-            </h2>
-            
             <div class="admin-info">
                 <div class="admin-avatar">
                     <?php echo strtoupper(substr($admin_name, 0, 1)); ?>
@@ -1260,20 +1190,6 @@ $total_users = array_sum($counts);
 
                 <div class="stat-card">
                     <div class="stat-header">
-                        <h3>Pending Approval</h3>
-                        <div class="stat-icon">
-                            <i class="fas fa-clock"></i>
-                        </div>
-                    </div>
-                    <div class="stat-number"><?php echo $pending_count; ?></div>
-                    <div class="stat-label">Awaiting approval</div>
-                </div>
-
-                <div class="stat-card">
-                    <div class="stat-header">
-<<<<<<< HEAD
-                        <h3>Teachers</h3>
-=======
                         <h3>Approved</h3>
                         <div class="stat-icon">
                             <i class="fas fa-check-circle"></i>
@@ -1286,7 +1202,6 @@ $total_users = array_sum($counts);
                 <div class="stat-card">
                     <div class="stat-header">
                         <h3>Rejected</h3>
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
                         <div class="stat-icon">
                             <i class="fas fa-times-circle"></i>
                         </div>
@@ -1334,34 +1249,48 @@ $total_users = array_sum($counts);
                         </tr>
                     </thead>
                     <tbody>
-                        <?php while($pending = $pending_users->fetch_assoc()): ?>
-                        <tr>
-                            <td>
-                                <span class="id-badge"><?php echo $pending['id_number'] ?: 'N/A'; ?></span>
-                            </td>
-                            <td><strong><?php echo htmlspecialchars($pending['fullname']); ?></strong></td>
-                            <td><?php echo htmlspecialchars($pending['email']); ?></td>
-                            <td>
-                                <span class="status-badge pending"><?php echo $pending['role']; ?></span>
-                            </td>
-                            <td>
-                                <i class="far fa-calendar"></i>
-                                <?php echo date('M d, Y h:i A', strtotime($pending['created_at'])); ?>
-                            </td>
-                            <td>
-                                <a href="?approve=<?php echo $pending['id']; ?>" 
-                                   class="btn-approve"
-                                   onclick="return confirm('Approve this user account?')">
-                                    <i class="fas fa-check"></i> Approve
-                                </a>
-                                <a href="?reject=<?php echo $pending['id']; ?>" 
-                                   class="btn-reject"
-                                   onclick="return confirm('Reject this registration request? This action cannot be undone.')">
-                                    <i class="fas fa-times"></i> Reject
-                                </a>
-                            </td>
-                        </tr>
-                        <?php endwhile; ?>
+                        <?php if(count($pending_users) > 0): ?>
+                            <?php foreach($pending_users as $pending): ?>
+                            <tr>
+                                <td>
+                                    <span class="id-badge"><?php echo $pending['id_number'] ?: 'N/A'; ?></span>
+                                </
+                                                                
+                                <td><strong><?php echo htmlspecialchars($pending['fullname']); ?></strong></td>
+                                <td><?php echo htmlspecialchars($pending['email']); ?></td>
+                                <td>
+                                    <span class="role-badge <?php echo strtolower($pending['role']); ?>">
+                                        <?php echo $pending['role']; ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <i class="far fa-calendar"></i>
+                                    <?php echo date('M d, Y h:i A', strtotime($pending['created_at'])); ?>
+                                </td>
+                                <td>
+                                    <a href="?approve=<?php echo $pending['id']; ?>" 
+                                       class="btn-approve"
+                                       onclick="return confirm('Approve this user account?')">
+                                        <i class="fas fa-check"></i> Approve
+                                    </a>
+                                    <button 
+                                       class="btn-reject"
+                                       onclick="openRejectModal(<?php echo $pending['id']; ?>, '<?php echo htmlspecialchars($pending['fullname']); ?>')">
+                                        <i class="fas fa-times"></i> Reject
+                                    </button>
+                                </td>
+                            </tr>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="6">
+                                    <div class="no-pending">
+                                        <i class="fas fa-check-circle"></i>
+                                        <p>No pending approvals at the moment.</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -1369,7 +1298,7 @@ $total_users = array_sum($counts);
 
             <!-- Section Title and Add Button -->
             <div class="section-title">
-                <h2><i class="fas fa-list"></i> Approved Accounts</h2>
+                <h2><i class="fas fa-list"></i> All Accounts</h2>
                 <a href="add_account.php" class="btn-add">
                     <i class="fas fa-plus-circle"></i> Add New Account
                 </a>
@@ -1424,8 +1353,8 @@ $total_users = array_sum($counts);
                         </tr>
                     </thead>
                     <tbody>
-                        <?php if($users && $users->num_rows > 0): ?>
-                            <?php while($user = $users->fetch_assoc()): ?>
+                        <?php if(count($users) > 0): ?>
+                            <?php foreach($users as $user): ?>
                                 <tr>
                                     <td>
                                         <span class="id-badge"><?php echo $user['id_number'] ?: 'N/A'; ?></span>
@@ -1496,19 +1425,14 @@ $total_users = array_sum($counts);
                                     </td>
                                 </tr>
                                 <?php endif; ?>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         <?php else: ?>
                             <tr>
                                 <td colspan="7">
                                     <div class="no-data">
                                         <i class="fas fa-users"></i>
-<<<<<<< HEAD
-                                        <h3>No Approved Users Found</h3>
-                                        <p><?php echo $pending_count > 0 ? 'Check the pending approvals section above.' : 'Click the "Add New Account" button to create your first user.'; ?></p>
-=======
                                         <h3>No Users Found</h3>
                                         <p>No user accounts match your search criteria.</p>
->>>>>>> 9619c00 (Old/New student, Fetch enroll)
                                     </div>
                                 </td>
                             </tr>
@@ -1566,17 +1490,14 @@ $total_users = array_sum($counts);
         setTimeout(function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
-                alert.style.opacity = '0';
                 setTimeout(() => {
-                    alert.style.display = 'none';
-                }, 300);
+                    alert.style.opacity = '0';
+                    setTimeout(() => {
+                        alert.style.display = 'none';
+                    }, 300);
+                }, 5000);
             });
-        }, 5000);
+        });
     </script>
 </body>
 </html>
-<?php 
-if(isset($stmt)) {
-    $stmt->close(); 
-}
-?>

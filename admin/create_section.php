@@ -29,10 +29,14 @@ $form_data = isset($_SESSION['form_data']) ? $_SESSION['form_data'] : [];
 unset($_SESSION['form_data']);
 
 // Get grade levels for dropdown
-$grade_levels = $conn->query("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
+$grade_levels_stmt->execute();
+$grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get teachers for adviser dropdown
-$teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$teachers_stmt = $conn->prepare("SELECT id, fullname FROM users WHERE role = 'Teacher' ORDER BY fullname");
+$teachers_stmt->execute();
+$teachers = $teachers_stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <!DOCTYPE html>
@@ -53,18 +57,17 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
         }
 
         :root {
-            --primary-color: #4361ee;
-            --secondary-color: #3f37c9;
-            --success-color: #4cc9f0;
-            --warning-color: #f72585;
-            --info-color: #4895ef;
-            --dark-bg: #1a1a2e;
-            --sidebar-bg: #16213e;
-            --card-bg: #ffffff;
+            --primary-color: #0B4F2E;
+            --primary-dark: #1a7a42;
+            --primary-light: rgba(11, 79, 46, 0.1);
+            --accent: #FFD700;
             --text-primary: #2b2d42;
             --text-secondary: #8d99ae;
             --border-color: #e9ecef;
             --hover-color: #f8f9fa;
+            --success: #28a745;
+            --danger: #dc3545;
+            --warning: #ffc107;
         }
 
         body {
@@ -205,6 +208,8 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
         }
 
         .header-left h1 {
@@ -254,6 +259,8 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
             box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
         }
 
@@ -319,13 +326,13 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
         .alert-success {
             background: #d4edda;
             color: #155724;
-            border-left: 4px solid #28a745;
+            border-left: 4px solid var(--success);
         }
 
         .alert-error {
             background: #f8d7da;
             color: #721c24;
-            border-left: 4px solid #dc3545;
+            border-left: 4px solid var(--danger);
         }
 
         .alert i {
@@ -402,6 +409,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             font-size: 15px;
             transition: all 0.3s;
             background: #f8f9fa;
+            font-family: inherit;
         }
 
         .form-group input:focus,
@@ -437,12 +445,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             font-size: 14px;
         }
 
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-
         .form-actions {
             display: flex;
             gap: 15px;
@@ -453,7 +455,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
 
         .btn-submit {
             flex: 1;
-            background: #0B4F2E;
+            background: linear-gradient(135deg, #0B4F2E, #1a7a42);
             color: white;
             padding: 16px;
             border: none;
@@ -469,7 +471,6 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
         }
 
         .btn-submit:hover {
-            background: #1a7a42;
             transform: translateY(-2px);
             box-shadow: 0 10px 25px rgba(11, 79, 46, 0.3);
         }
@@ -597,16 +598,17 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                 gap: 20px;
             }
             
-            .form-row {
-                grid-template-columns: 1fr;
-            }
-            
             .form-actions {
                 flex-direction: column;
             }
             
             .form-card {
                 padding: 25px;
+            }
+            
+            .preview-item {
+                flex-direction: column;
+                text-align: center;
             }
         }
     </style>
@@ -634,7 +636,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
                     <li><a href="students.php"><i class="fas fa-user-graduate"></i> <span>Students</span></a></li>
                     <li><a href="teachers.php"><i class="fas fa-chalkboard-teacher"></i> <span>Teachers</span></a></li>
-                    <li><a href="sections.php"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
+                    <li><a href="sections.php" class="active"><i class="fas fa-layer-group"></i> <span>Sections</span></a></li>
                     <li><a href="subjects.php"><i class="fas fa-book"></i> <span>Subjects</span></a></li>
                     <li><a href="enrollments.php"><i class="fas fa-file-signature"></i> <span>Enrollments</span></a></li>
                 </ul>
@@ -727,15 +729,12 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                         <label>Grade Level <span>*</span></label>
                         <select name="grade_id" id="grade_id" required>
                             <option value="">Select Grade Level</option>
-                            <?php 
-                            $grade_levels->data_seek(0);
-                            while($grade = $grade_levels->fetch_assoc()): 
-                            ?>
+                            <?php foreach($grade_levels as $grade): ?>
                                 <option value="<?php echo $grade['id']; ?>" 
                                     <?php echo (isset($form_data['grade_id']) && $form_data['grade_id'] == $grade['id']) ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($grade['grade_name']); ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
                     </div>
 
@@ -743,15 +742,12 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                         <label>Class Adviser</label>
                         <select name="adviser_id" id="adviser_id">
                             <option value="">Select Adviser (Optional)</option>
-                            <?php 
-                            $teachers->data_seek(0);
-                            while($teacher = $teachers->fetch_assoc()): 
-                            ?>
+                            <?php foreach($teachers as $teacher): ?>
                                 <option value="<?php echo $teacher['id']; ?>"
                                     <?php echo (isset($form_data['adviser_id']) && $form_data['adviser_id'] == $teacher['id']) ? 'selected' : ''; ?>>
                                     <?php echo htmlspecialchars($teacher['fullname']); ?>
                                 </option>
-                            <?php endwhile; ?>
+                            <?php endforeach; ?>
                         </select>
                         <div class="form-hint">
                             <i class="fas fa-info-circle"></i>
@@ -774,8 +770,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                                     <?php 
                                     $grade_text = 'Grade Level';
                                     if(isset($form_data['grade_id'])) {
-                                        $grade_levels->data_seek(0);
-                                        while($grade = $grade_levels->fetch_assoc()) {
+                                        foreach($grade_levels as $grade) {
                                             if($grade['id'] == $form_data['grade_id']) {
                                                 $grade_text = $grade['grade_name'];
                                                 break;
@@ -785,8 +780,7 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
                                     
                                     $adviser_text = 'No Adviser Assigned';
                                     if(isset($form_data['adviser_id']) && $form_data['adviser_id']) {
-                                        $teachers->data_seek(0);
-                                        while($teacher = $teachers->fetch_assoc()) {
+                                        foreach($teachers as $teacher) {
                                             if($teacher['id'] == $form_data['adviser_id']) {
                                                 $adviser_text = 'Adviser: ' . $teacher['fullname'];
                                                 break;
@@ -850,9 +844,9 @@ $teachers = $conn->query("SELECT id, fullname FROM users WHERE role = 'Teacher' 
             previewDetails.textContent = `${gradeText} · ${adviserText}`;
         }
 
-        sectionNameInput.addEventListener('input', updatePreview);
-        gradeSelect.addEventListener('change', updatePreview);
-        adviserSelect.addEventListener('change', updatePreview);
+        if(sectionNameInput) sectionNameInput.addEventListener('input', updatePreview);
+        if(gradeSelect) gradeSelect.addEventListener('change', updatePreview);
+        if(adviserSelect) adviserSelect.addEventListener('change', updatePreview);
 
         // Initial preview update
         updatePreview();

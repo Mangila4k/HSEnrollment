@@ -12,7 +12,7 @@ require_once("../config/database.php");
 
 // Check if connection is successful
 if (!$conn) {
-    die("Database connection failed: " . mysqli_connect_error());
+    die("Database connection failed");
 }
 
 $teacher_id = $_SESSION['user']['id'];
@@ -37,7 +37,7 @@ if(isset($_SESSION['error_message'])) {
 $columns_check = $conn->query("SHOW COLUMNS FROM users");
 $user_columns = [];
 if($columns_check) {
-    while($col = $columns_check->fetch_assoc()) {
+    while($col = $columns_check->fetch(PDO::FETCH_ASSOC)) {
         $user_columns[] = $col['Field'];
     }
 }
@@ -46,7 +46,7 @@ if($columns_check) {
 $enrollment_columns_check = $conn->query("SHOW COLUMNS FROM enrollments");
 $enrollment_columns = [];
 if($enrollment_columns_check) {
-    while($col = $enrollment_columns_check->fetch_assoc()) {
+    while($col = $enrollment_columns_check->fetch(PDO::FETCH_ASSOC)) {
         $enrollment_columns[] = $col['Field'];
     }
 }
@@ -91,18 +91,16 @@ if(in_array('profile_photo', $user_columns)) {
 
 $student_query .= "
     FROM users u
-    WHERE u.id = ? AND u.role = 'Student'
+    WHERE u.id = :student_id AND u.role = 'Student'
 ";
 
 $stmt = $conn->prepare($student_query);
 if (!$stmt) {
-    die("Error preparing student query: " . $conn->error);
+    die("Error preparing student query: " . $conn->errorInfo()[2]);
 }
-$stmt->bind_param("i", $student_id);
-$stmt->execute();
-$result = $stmt->get_result();
-$student = $result->fetch_assoc();
-$stmt->close();
+$stmt->execute([':student_id' => $student_id]);
+$student = $stmt->fetch(PDO::FETCH_ASSOC);
+$stmt->closeCursor();
 
 if(!$student) {
     $_SESSION['error_message'] = "Student not found.";
@@ -151,18 +149,16 @@ if(in_array('strand', $enrollment_columns)) {
 
 $enrollment_query .= "
     FROM enrollments e
-    WHERE e.student_id = ?
+    WHERE e.student_id = :student_id
     ORDER BY e.id DESC
     LIMIT 1
 ";
 
 $stmt = $conn->prepare($enrollment_query);
 if ($stmt) {
-    $stmt->bind_param("i", $student_id);
-    $stmt->execute();
-    $enrollment_result = $stmt->get_result();
-    $enrollment = $enrollment_result->fetch_assoc();
-    $stmt->close();
+    $stmt->execute([':student_id' => $student_id]);
+    $enrollment = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt->closeCursor();
     
     // Merge enrollment data with student data
     if($enrollment) {
@@ -172,7 +168,7 @@ if ($stmt) {
     }
 }
 
-// Get section and grade information if section_id exists - FIXED: Removed grade_level
+// Get section and grade information if section_id exists
 if(isset($student['section_id']) && $student['section_id'] > 0) {
     $section_info_query = "
         SELECT 
@@ -180,15 +176,14 @@ if(isset($student['section_id']) && $student['section_id'] > 0) {
             g.grade_name
         FROM sections s
         LEFT JOIN grade_levels g ON s.grade_id = g.id
-        WHERE s.id = ?
+        WHERE s.id = :section_id
     ";
     
     $stmt = $conn->prepare($section_info_query);
     if($stmt) {
-        $stmt->bind_param("i", $student['section_id']);
-        $stmt->execute();
-        $section_info = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        $stmt->execute([':section_id' => $student['section_id']]);
+        $section_info = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
         
         if($section_info) {
             $student['section_name'] = $section_info['section_name'];
@@ -196,19 +191,18 @@ if(isset($student['section_id']) && $student['section_id'] > 0) {
         }
     }
 } elseif(isset($student['grade_id']) && $student['grade_id'] > 0) {
-    // Get grade information from grade_id - FIXED: Removed grade_level
+    // Get grade information from grade_id
     $grade_info_query = "
         SELECT grade_name
         FROM grade_levels
-        WHERE id = ?
+        WHERE id = :grade_id
     ";
     
     $stmt = $conn->prepare($grade_info_query);
     if($stmt) {
-        $stmt->bind_param("i", $student['grade_id']);
-        $stmt->execute();
-        $grade_info = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        $stmt->execute([':grade_id' => $student['grade_id']]);
+        $grade_info = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
         
         if($grade_info) {
             $student['grade_name'] = $grade_info['grade_name'];
@@ -221,28 +215,32 @@ if(isset($student['section_id']) && $student['section_id'] > 0) {
     $access_query = "
         SELECT COUNT(*) as has_access
         FROM class_schedules cs
-        WHERE cs.teacher_id = ? AND cs.section_id = ?
+        WHERE cs.teacher_id = :teacher_id AND cs.section_id = :section_id
     ";
 
     $stmt = $conn->prepare($access_query);
     if($stmt) {
-        $stmt->bind_param("ii", $teacher_id, $student['section_id']);
-        $stmt->execute();
-        $access_result = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
+        $stmt->execute([
+            ':teacher_id' => $teacher_id,
+            ':section_id' => $student['section_id']
+        ]);
+        $access_result = $stmt->fetch(PDO::FETCH_ASSOC);
+        $stmt->closeCursor();
         
         $is_adviser_query = "
             SELECT COUNT(*) as is_adviser
             FROM sections s
-            WHERE s.adviser_id = ? AND s.id = ?
+            WHERE s.adviser_id = :teacher_id AND s.id = :section_id
         ";
 
         $stmt = $conn->prepare($is_adviser_query);
         if($stmt) {
-            $stmt->bind_param("ii", $teacher_id, $student['section_id']);
-            $stmt->execute();
-            $adviser_result = $stmt->get_result()->fetch_assoc();
-            $stmt->close();
+            $stmt->execute([
+                ':teacher_id' => $teacher_id,
+                ':section_id' => $student['section_id']
+            ]);
+            $adviser_result = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt->closeCursor();
             
             $has_access = ($access_result['has_access'] > 0 || $adviser_result['is_adviser'] > 0);
             
@@ -255,7 +253,7 @@ if(isset($student['section_id']) && $student['section_id'] > 0) {
     }
 }
 
-// Get student's attendance records - FIXED: Removed time_in and time_out since they don't exist
+// Get student's attendance records
 $attendance_query = "
     SELECT 
         a.*,
@@ -263,19 +261,19 @@ $attendance_query = "
         sub.subject_name
     FROM attendance a
     LEFT JOIN subjects sub ON a.subject_id = sub.id
-    WHERE a.student_id = ?
+    WHERE a.student_id = :student_id
     ORDER BY a.date DESC
     LIMIT 30
 ";
 
 $stmt = $conn->prepare($attendance_query);
 if ($stmt) {
-    $stmt->bind_param("i", $student_id);
-    $stmt->execute();
-    $attendance_records = $stmt->get_result();
-    $stmt->close();
+    $stmt->execute([':student_id' => $student_id]);
+    $attendance_records = $stmt;
+    $attendance_count = $stmt->rowCount();
 } else {
     $attendance_records = null;
+    $attendance_count = 0;
 }
 
 // Get attendance statistics
@@ -286,15 +284,14 @@ $attendance_stats_query = "
         SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) as absent_count,
         SUM(CASE WHEN status = 'Late' THEN 1 ELSE 0 END) as late_count
     FROM attendance
-    WHERE student_id = ?
+    WHERE student_id = :student_id
 ";
 
 $stmt = $conn->prepare($attendance_stats_query);
 if ($stmt) {
-    $stmt->bind_param("i", $student_id);
-    $stmt->execute();
-    $stats = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    $stmt->execute([':student_id' => $student_id]);
+    $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    $stmt->closeCursor();
     
     $total_days = $stats['total_days'] ?? 0;
     $present_count = $stats['present_count'] ?? 0;
@@ -313,11 +310,11 @@ if ($stmt) {
 // Check if grades table exists
 $grades_table_exists = false;
 $table_check = $conn->query("SHOW TABLES LIKE 'grades'");
-if($table_check && $table_check->num_rows > 0) {
+if($table_check && $table_check->rowCount() > 0) {
     $grades_table_exists = true;
 }
 
-// Get student's grades - FIXED: Removed subject_code and teacher_name
+// Get student's grades
 $grades = null;
 $grade_stats = [
     'q1_avg' => 0,
@@ -335,27 +332,31 @@ if($grades_table_exists) {
             sub.subject_name
         FROM grades g
         LEFT JOIN subjects sub ON g.subject_id = sub.id
-        WHERE g.student_id = ?
+        WHERE g.student_id = :student_id
         ORDER BY g.quarter, sub.subject_name
     ";
 
     $stmt = $conn->prepare($grades_query);
     if ($stmt) {
-        $stmt->bind_param("i", $student_id);
-        $stmt->execute();
-        $grades = $stmt->get_result();
-        $stmt->close();
+        $stmt->execute([':student_id' => $student_id]);
+        $grades = $stmt;
+        $grades_count = $stmt->rowCount();
         
         // Calculate grade statistics
-        if ($grades && $grades->num_rows > 0) {
-            $grades->data_seek(0);
+        if ($grades_count > 0) {
+            // Need to fetch all data for calculations
+            $all_grades = [];
+            while($grade = $grades->fetch(PDO::FETCH_ASSOC)) {
+                $all_grades[] = $grade;
+            }
+            
             $q1_sum = 0; $q1_count = 0;
             $q2_sum = 0; $q2_count = 0;
             $q3_sum = 0; $q3_count = 0;
             $q4_sum = 0; $q4_count = 0;
             $subjects = [];
             
-            while($grade = $grades->fetch_assoc()) {
+            foreach($all_grades as $grade) {
                 if (!in_array($grade['subject_id'], $subjects)) {
                     $subjects[] = $grade['subject_id'];
                 }
@@ -380,11 +381,14 @@ if($grades_table_exists) {
                 'q2_avg' => $q2_count > 0 ? round($q2_sum / $q2_count, 2) : 0,
                 'q3_avg' => $q3_count > 0 ? round($q3_sum / $q3_count, 2) : 0,
                 'q4_avg' => $q4_count > 0 ? round($q4_sum / $q4_count, 2) : 0,
-                'final_avg' => 0, // No final_grade column
+                'final_avg' => 0,
                 'total_subjects' => count($subjects)
             ];
             
-            $grades->data_seek(0); // Reset pointer
+            // Reset pointer for later use - store grades array
+            $grades_data = $all_grades;
+        } else {
+            $grades_data = [];
         }
     }
 }
@@ -417,6 +421,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        /* Copy all the CSS from your existing file here - same as before */
         * {
             margin: 0;
             padding: 0;
@@ -612,56 +617,6 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
 
         .back-btn i {
             color: var(--primary);
-        }
-
-        /* Welcome Card */
-        .welcome-card {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 20px;
-            padding: 30px;
-            color: white;
-            margin-bottom: 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 10px 30px rgba(11, 79, 46, 0.3);
-        }
-
-        .welcome-text h2 {
-            font-size: 24px;
-            margin-bottom: 10px;
-            font-weight: 600;
-        }
-
-        .welcome-text p {
-            font-size: 16px;
-            opacity: 0.9;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .welcome-text p i {
-            color: var(--accent);
-        }
-
-        .logout-btn {
-            background: rgba(255, 255, 255, 0.2);
-            color: white;
-            padding: 12px 25px;
-            border-radius: 12px;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.3s ease;
-            font-weight: 500;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .logout-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: translateY(-2px);
         }
 
         /* Alert Messages */
@@ -1169,7 +1124,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 <h3>MAIN MENU</h3>
                 <ul class="menu-items">
                     <li><a href="dashboard.php"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="attendance.php"><i class="fas fa-calendar-check"></i> <span>Attendance</span></a></li>
+                    <li><a href="attendance_qr.php"><i class="fas fa-qrcode"></i> <span>QR Attendance </span></a></li>
                     <li><a href="classes.php" class="active"><i class="fas fa-users"></i> <span>My Classes</span></a></li>
                     <li><a href="schedule.php"><i class="fas fa-clock"></i> <span>Schedule</span></a></li>
                     <li><a href="grades.php"><i class="fas fa-star"></i> <span>Grades</span></a></li>
@@ -1197,7 +1152,6 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                     <i class="fas fa-arrow-left"></i> Go Back
                 </a>
             </div>
-
 
             <!-- Alert Messages -->
             <?php if($success_message): ?>
@@ -1437,11 +1391,11 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
             <div class="card" style="margin-bottom: 30px;">
                 <div class="card-header">
                     <h3><i class="fas fa-star"></i> Subject Grades</h3>
-                    <span class="badge"><?php echo $grades ? $grades->num_rows : 0; ?> records</span>
+                    <span class="badge"><?php echo isset($grades_count) ? $grades_count : 0; ?> records</span>
                 </div>
 
                 <div class="table-container">
-                    <?php if($grades_table_exists && $grades && $grades->num_rows > 0): ?>
+                    <?php if($grades_table_exists && isset($grades_data) && count($grades_data) > 0): ?>
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -1453,7 +1407,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                             </thead>
                             <tbody>
                                 <?php 
-                                while($grade = $grades->fetch_assoc()): 
+                                foreach($grades_data as $grade): 
                                 ?>
                                     <tr>
                                         <td>
@@ -1476,7 +1430,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                                             <?php else: ?>—<?php endif; ?>
                                         </td>
                                     </tr>
-                                <?php endwhile; ?>
+                                <?php endforeach; ?>
                             </tbody>
                         </table>
                     <?php elseif($grades_table_exists): ?>
@@ -1503,7 +1457,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                 </div>
 
                 <div class="table-container">
-                    <?php if($attendance_records && $attendance_records->num_rows > 0): ?>
+                    <?php if($attendance_records && $attendance_count > 0): ?>
                         <table class="data-table">
                             <thead>
                                 <tr>
@@ -1513,7 +1467,7 @@ $current_sy = date('Y') . '-' . (date('Y') + 1);
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php while($attendance = $attendance_records->fetch_assoc()): ?>
+                                <?php while($attendance = $attendance_records->fetch(PDO::FETCH_ASSOC)): ?>
                                     <tr>
                                         <td><?php echo $attendance['formatted_date']; ?></td>
                                         <td><?php echo htmlspecialchars($attendance['subject_name'] ?? 'N/A'); ?></td>
