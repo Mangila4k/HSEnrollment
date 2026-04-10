@@ -105,6 +105,7 @@ if(isset($_POST['register'])){
 
     // If no errors, insert the user with pending status
     if(empty($errors)) {
+<<<<<<< HEAD
         try {
             $hashed_password = password_hash($password, PASSWORD_DEFAULT);
             $status = 'pending'; // Set status to pending
@@ -134,6 +135,32 @@ if(isset($_POST['register'])){
                 }
             }
             
+=======
+        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+        $status = 'pending'; // Set status to pending
+        
+        // Update the database schema first - you need to add these columns to your users table
+        // Run this SQL in your database:
+        /*
+        ALTER TABLE users 
+        ADD COLUMN firstname VARCHAR(100) AFTER id_number,
+        ADD COLUMN middlename VARCHAR(50) AFTER firstname,
+        ADD COLUMN lastname VARCHAR(100) AFTER middlename,
+        ADD COLUMN birthdate DATE AFTER lastname,
+        ADD COLUMN gender ENUM('Male', 'Female', 'Other') AFTER birthdate;
+        */
+        
+        // Insert based on whether ID number is provided
+        if($id_number) {
+            $stmt = $conn->prepare("INSERT INTO users (id_number, firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("sssssssssss", $id_number, $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
+        } else {
+            $stmt = $conn->prepare("INSERT INTO users (firstname, middlename, lastname, fullname, birthdate, gender, email, password, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("ssssssssss", $firstname, $middlename, $lastname, $fullname, $birthdate, $gender, $email, $hashed_password, $role, $status);
+        }
+        
+        if($stmt->execute()) {
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             $success = "Registration successful! Your account is pending approval from the administrator. You will be notified once your account is approved.";
             // Clear form data
             $_POST = array();

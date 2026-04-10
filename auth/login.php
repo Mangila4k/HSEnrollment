@@ -109,7 +109,11 @@ if(isset($_POST['login'])){
                             header("Location: ../admin/dashboard.php");
                             break;
                         case 'Registrar':
+<<<<<<< HEAD
                             header("Location: ../registrar/dashboard.php");
+=======
+                            header("Location: ../registrar/enrollments.php");
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                             break;
                         case 'Teacher':
                             header("Location: ../teacher/dashboard.php");
@@ -117,9 +121,12 @@ if(isset($_POST['login'])){
                         case 'Student':
                             header("Location: ../student/dashboard.php");
                             break;
+<<<<<<< HEAD
                         default:
                             header("Location: ../student/dashboard.php");
                             break;
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                     }
                     exit();
                 }
@@ -140,11 +147,17 @@ if(isset($_POST['login'])){
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<<<<<<< HEAD
     <title>Login - EnrollSys | Placido L. Señor National High School</title>
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+=======
+    <title>Login - Placido L. Señor Senior High School</title>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
     <style>
         * {
             margin: 0;
@@ -189,7 +202,6 @@ if(isset($_POST['login'])){
             }
         }
 
-        /* Left Panel - Login Form */
         .login-panel {
             flex: 1;
             padding: 50px 40px;
@@ -402,6 +414,7 @@ if(isset($_POST['login'])){
             text-decoration: underline;
         }
 
+<<<<<<< HEAD
         .back-home {
             display: inline-flex;
             align-items: center;
@@ -422,6 +435,8 @@ if(isset($_POST['login'])){
         }
 
         /* Right Panel - Info Panel */
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         .info-panel {
             flex: 1;
             background: linear-gradient(135deg, #169e5dff, #1a7a42);
@@ -516,8 +531,35 @@ if(isset($_POST['login'])){
             line-height: 1.6;
             padding-top: 20px;
             border-top: 1px solid rgba(255, 255, 255, 0.2);
+<<<<<<< HEAD
             position: relative;
             z-index: 1;
+=======
+            font-style: italic;
+        }
+
+        .error-message {
+            background-color: #fee2e2;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border-left: 4px solid #dc2626;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .success-message {
+            background-color: #dcfce7;
+            color: #16a34a;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border-left: 4px solid #22c55e;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
 
         /* Responsive */
@@ -575,12 +617,29 @@ if(isset($_POST['login'])){
                     </div>
                 <?php endif; ?>
 
+<<<<<<< HEAD
                 <?php if(isset($_GET['pending'])): ?>
                     <div class="alert alert-success">
                         <i class="fas fa-info-circle"></i> 
                         Your account is pending approval. You will be notified once approved.
                     </div>
                 <?php endif; ?>
+=======
+            <h2>Login to your Account</h2>
+            <p class="subtitle">Enter your credentials to access the system</p>
+            
+            <?php if(!empty($error)): ?>
+                <div class="error-message">
+                    <i class="fas fa-exclamation-circle"></i> <?php echo $error; ?>
+                </div>
+            <?php endif; ?>
+            
+            <?php if(isset($_GET['registered'])): ?>
+                <div class="success-message">
+                    <i class="fas fa-check-circle"></i> Registration successful! Please wait for admin approval.
+                </div>
+            <?php endif; ?>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 
                 <form method="POST" action="">
                     <div class="input-group">
@@ -651,6 +710,7 @@ if(isset($_POST['login'])){
             </div>
         </div>
     </div>
+<<<<<<< HEAD
 
     <script>
         // Toggle password visibility
@@ -680,5 +740,10 @@ if(isset($_POST['login'])){
             });
         });
     </script>
+=======
+    
+    <!-- Font Awesome -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/js/all.min.js"></script>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 </body>
 </html>

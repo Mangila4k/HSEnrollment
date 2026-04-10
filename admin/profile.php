@@ -148,6 +148,48 @@ if(isset($_SESSION['2fa_verified']) && $_SESSION['2fa_verified'] === true) {
     }
 }
 
+// Handle 2FA toggle
+if(isset($_POST['toggle_2fa'])) {
+    $action = $_POST['action'];
+    
+    if($action == 'enable') {
+        // Start 2FA verification for enabling
+        $error = start2FAVerification(
+            $admin_id,
+            $admin['email'],
+            $admin['fullname'],
+            'enable_2fa',
+            'profile.php'
+        );
+    } elseif($action == 'disable') {
+        // Start 2FA verification for disabling
+        $error = start2FAVerification(
+            $admin_id,
+            $admin['email'],
+            $admin['fullname'],
+            'disable_2fa',
+            'profile.php'
+        );
+    }
+}
+
+// Handle 2FA verification completion
+if(isset($_SESSION['2fa_verified']) && $_SESSION['2fa_verified'] === true) {
+    if(time() - $_SESSION['2fa_verified_time'] < 600) {
+        // Verification is still valid
+        // The actual enable/disable was handled in verify_2fa.php
+        unset($_SESSION['2fa_verified']);
+        unset($_SESSION['2fa_verified_time']);
+        
+        // Refresh admin data
+        $result = $conn->query("SELECT * FROM users WHERE id = $admin_id");
+        $admin = $result->fetch_assoc();
+    } else {
+        unset($_SESSION['2fa_verified']);
+        unset($_SESSION['2fa_verified_time']);
+    }
+}
+
 // Handle profile update
 if($_SERVER['REQUEST_METHOD'] == 'POST') {
     if(isset($_POST['update_profile'])) {
@@ -259,15 +301,27 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
                 $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
                 $update_query = "UPDATE users SET password = ? WHERE id = ?";
                 $update_stmt = $conn->prepare($update_query);
+<<<<<<< HEAD
                 
                 if($update_stmt->execute([$hashed_password, $admin_id])) {
+=======
+                $update_stmt->bind_param("si", $hashed_password, $admin_id);
+                
+                if($update_stmt->execute()) {
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                     $_SESSION['success_message'] = "Password changed successfully!";
                     header("Location: profile.php");
                     exit();
                 } else {
+<<<<<<< HEAD
                     $errors[] = "Database error: " . $conn->errorInfo()[2];
                 }
                 $update_stmt = null;
+=======
+                    $errors[] = "Database error: " . $conn->error;
+                }
+                $update_stmt->close();
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             }
         }
         
@@ -281,10 +335,13 @@ if($_SERVER['REQUEST_METHOD'] == 'POST') {
 $account_created = $admin['created_at'];
 $two_factor_enabled = $admin['two_factor_enabled'] ?? 0;
 $two_factor_last_used = $admin['two_factor_last_used'] ?? null;
+<<<<<<< HEAD
 $profile_picture = $admin['profile_picture'] ?? null;
 
 // Get profile picture for sidebar
 $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 ?>
 
 <!DOCTYPE html>
@@ -370,6 +427,10 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
         .admin-avatar {
             width: 80px;
             height: 80px;
+<<<<<<< HEAD
+=======
+            background: var(--accent);
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -395,6 +456,10 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
             font-size: 32px;
             font-weight: bold;
             color: var(--primary);
+<<<<<<< HEAD
+=======
+            border: 3px solid white;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
 
         .admin-info h3 {
@@ -588,6 +653,7 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
         }
 
         .profile-avatar-large {
+<<<<<<< HEAD
             width: 150px;
             height: 150px;
             margin: 0 auto 20px;
@@ -611,6 +677,11 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
             background: var(--primary);
             width: 40px;
             height: 40px;
+=======
+            width: 120px;
+            height: 120px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -638,7 +709,10 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
             font-weight: bold;
             color: white;
             border: 4px solid var(--accent);
+<<<<<<< HEAD
             margin: 0 auto;
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
 
         .profile-name {
@@ -726,6 +800,7 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
             color: var(--text-primary);
         }
 
+<<<<<<< HEAD
         /* Image Upload Modal */
         .modal {
             display: none;
@@ -897,6 +972,8 @@ $sidebar_profile_pic = $_SESSION['user']['profile_picture'] ?? $profile_picture;
             color: white;
         }
 
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         /* 2FA Section */
         .twofa-section {
             background: white;

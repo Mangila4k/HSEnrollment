@@ -29,16 +29,27 @@ if(isset($_GET['approve']) && is_numeric($_GET['approve'])) {
     $user_id = $_GET['approve'];
     
     $stmt = $conn->prepare("UPDATE users SET status = 'approved', approved_by = ?, approved_at = NOW() WHERE id = ?");
+<<<<<<< HEAD
     if($stmt->execute([$admin_id, $user_id])) {
         $success_message = "User approved successfully!";
     } else {
         $error_message = "Error approving user";
     }
+=======
+    $stmt->bind_param("ii", $admin_id, $user_id);
+    if($stmt->execute()) {
+        $success_message = "User approved successfully!";
+    } else {
+        $error_message = "Error approving user: " . $conn->error;
+    }
+    $stmt->close();
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 }
 
 // Handle user rejection
 if(isset($_POST['reject_user'])) {
     $user_id = $_POST['user_id'];
+<<<<<<< HEAD
     $reason = $_POST['rejection_reason'];
     
     $stmt = $conn->prepare("UPDATE users SET status = 'rejected', rejection_reason = ?, approved_by = ?, approved_at = NOW() WHERE id = ?");
@@ -47,6 +58,18 @@ if(isset($_POST['reject_user'])) {
     } else {
         $error_message = "Error rejecting user";
     }
+=======
+    $reason = mysqli_real_escape_string($conn, $_POST['rejection_reason']);
+    
+    $stmt = $conn->prepare("UPDATE users SET status = 'rejected', rejection_reason = ?, approved_by = ?, approved_at = NOW() WHERE id = ?");
+    $stmt->bind_param("sii", $reason, $admin_id, $user_id);
+    if($stmt->execute()) {
+        $success_message = "User rejected successfully!";
+    } else {
+        $error_message = "Error rejecting user: " . $conn->error;
+    }
+    $stmt->close();
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 }
 
 // Handle user deletion
@@ -57,6 +80,7 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     if($delete_id != $_SESSION['user']['id']) {
         
         // Check if user has related records
+<<<<<<< HEAD
         $check_enrollments = $conn->prepare("SELECT id FROM enrollments WHERE student_id = ?");
         $check_enrollments->execute([$delete_id]);
         
@@ -71,6 +95,15 @@ if(isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         
         if($check_enrollments->rowCount() > 0 || $check_attendance->rowCount() > 0 || 
            $check_sections->rowCount() > 0 || $check_teacher_attendance->rowCount() > 0) {
+=======
+        $check_enrollments = $conn->query("SELECT id FROM enrollments WHERE student_id = '$delete_id'");
+        $check_attendance = $conn->query("SELECT id FROM attendance WHERE student_id = '$delete_id'");
+        $check_sections = $conn->query("SELECT id FROM sections WHERE adviser_id = '$delete_id'");
+        $check_teacher_attendance = $conn->query("SELECT id FROM teacher_attendance WHERE teacher_id = '$delete_id'");
+        
+        if($check_enrollments->num_rows > 0 || $check_attendance->num_rows > 0 || 
+           $check_sections->num_rows > 0 || $check_teacher_attendance->num_rows > 0) {
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             $error_message = "Cannot delete user because they have related records (enrollments, attendance, or sections).";
         } else {
             $stmt = $conn->prepare("DELETE FROM users WHERE id = ?");
@@ -112,6 +145,12 @@ if(!empty($status_filter)) {
     $params[] = $status_filter;
 }
 
+if(!empty($status_filter)) {
+    $query .= " AND status = ?";
+    $params[] = $status_filter;
+    $types .= "s";
+}
+
 if(!empty($search)) {
     $query .= " AND (fullname LIKE ? OR email LIKE ? OR id_number LIKE ?)";
     $search_term = "%$search%";
@@ -133,7 +172,11 @@ $stmt = $conn->prepare($query);
 $stmt->execute($params);
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+<<<<<<< HEAD
 // Get counts by role (approved users only)
+=======
+// Get counts by role and status
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 $counts = [];
 $roles = ['Admin', 'Registrar', 'Teacher', 'Student'];
 foreach($roles as $role) {
@@ -143,6 +186,7 @@ foreach($roles as $role) {
 }
 
 // Get status counts
+<<<<<<< HEAD
 $pending_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'");
 $pending_count = $pending_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
@@ -151,6 +195,11 @@ $approved_count = $approved_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
 
 $rejected_count_stmt = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'rejected'");
 $rejected_count = $rejected_count_stmt->fetch(PDO::FETCH_ASSOC)['count'];
+=======
+$pending_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'pending'")->fetch_assoc()['count'];
+$approved_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'approved'")->fetch_assoc()['count'];
+$rejected_count = $conn->query("SELECT COUNT(*) as count FROM users WHERE status = 'rejected'")->fetch_assoc()['count'];
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 
 $total_users = array_sum($counts);
 ?>
@@ -557,6 +606,7 @@ $total_users = array_sum($counts);
             color: white;
         }
 
+<<<<<<< HEAD
         /* Pending Section */
         .pending-section {
             background: white;
@@ -683,6 +733,8 @@ $total_users = array_sum($counts);
             opacity: 0.3;
         }
 
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         /* Section Title */
         .section-title {
             padding: 20px 0;
@@ -874,7 +926,7 @@ $total_users = array_sum($counts);
             flex-wrap: wrap;
         }
 
-        .btn-view, .btn-edit, .btn-delete {
+        .btn-view, .btn-edit, .btn-delete, .btn-approve, .btn-reject {
             padding: 8px 12px;
             border-radius: 8px;
             font-size: 12px;
@@ -921,6 +973,31 @@ $total_users = array_sum($counts);
             transform: translateY(-2px);
         }
 
+<<<<<<< HEAD
+=======
+        .btn-approve {
+            background: rgba(40, 167, 69, 0.1);
+            color: var(--success);
+        }
+
+        .btn-approve:hover {
+            background: var(--success);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .btn-reject {
+            background: rgba(220, 53, 69, 0.1);
+            color: var(--danger);
+        }
+
+        .btn-reject:hover {
+            background: var(--danger);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         .no-data {
             text-align: center;
             padding: 60px;
@@ -996,7 +1073,10 @@ $total_users = array_sum($counts);
             border-radius: 8px;
             min-height: 100px;
             font-family: inherit;
+<<<<<<< HEAD
             margin-top: 10px;
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
 
         .modal-footer {
@@ -1027,11 +1107,14 @@ $total_users = array_sum($counts);
             cursor: pointer;
         }
 
+<<<<<<< HEAD
         .activity-time {
             font-size: 12px;
             color: var(--text-secondary);
         }
 
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         /* Responsive */
         @media (max-width: 1200px) {
             .stats-container {
@@ -1093,6 +1176,7 @@ $total_users = array_sum($counts);
             .action-btns {
                 justify-content: center;
             }
+<<<<<<< HEAD
             
             .pending-header {
                 flex-direction: column;
@@ -1112,6 +1196,8 @@ $total_users = array_sum($counts);
                 padding: 4px 8px;
                 font-size: 10px;
             }
+=======
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
     </style>
 </head>
@@ -1179,7 +1265,11 @@ $total_users = array_sum($counts);
 
                 <div class="stat-card">
                     <div class="stat-header">
+<<<<<<< HEAD
                         <h3>Pending</h3>
+=======
+                        <h3>Pending Approval</h3>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                         <div class="stat-icon">
                             <i class="fas fa-clock"></i>
                         </div>
@@ -1425,7 +1515,11 @@ $total_users = array_sum($counts);
                                     </td>
                                 </tr>
                                 <?php endif; ?>
+<<<<<<< HEAD
                             <?php endforeach; ?>
+=======
+                            <?php endwhile; ?>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                         <?php else: ?>
                             <tr>
                                 <td colspan="7">
@@ -1500,4 +1594,13 @@ $total_users = array_sum($counts);
         });
     </script>
 </body>
+<<<<<<< HEAD
 </html>
+=======
+</html>
+<?php 
+if(isset($stmt)) {
+    $stmt->close(); 
+}
+?>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac

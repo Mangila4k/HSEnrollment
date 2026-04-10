@@ -65,6 +65,7 @@ $grade_filter = isset($_GET['grade']) ? $_GET['grade'] : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search_query = isset($_GET['search']) ? $_GET['search'] : '';
 
+<<<<<<< HEAD
 // Get current school year
 $current_year = date('Y');
 $current_sy = $current_year . '-' . ($current_year + 1);
@@ -149,6 +150,10 @@ $all_students = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Calculate student statistics for classification
 $new_students = 0;
 $old_students = 0;
+=======
+// Get statistics
+$total_students = $conn->query("SELECT COUNT(*) as count FROM users WHERE role = 'Student'")->fetch_assoc()['count'];
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 
 foreach($all_students as $student) {
     if($student['total_enrollments'] == 1 && !empty($student['enrollment_id'])) {
@@ -162,6 +167,20 @@ $student_stats = [
     'new_students' => $new_students,
     'old_students' => $old_students
 ];
+
+// Initialize Student Classifier
+require_once '../includes/StudentClassifier.php';
+$classifier = new StudentClassifier($conn);
+
+// Get student statistics with classification
+$student_stats = $classifier->getStudentStats();
+
+// Get all students with classification for display
+$all_students = $classifier->getAllStudentsWithClassification([
+    'grade' => $grade_filter,
+    'status' => $status_filter,
+    'search' => $search_query
+]);
 
 // Get grade levels for filter
 $grade_levels_stmt = $conn->prepare("SELECT * FROM grade_levels ORDER BY id");
@@ -1172,6 +1191,7 @@ $grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
                         </tr>
                     </thead>
                     <tbody>
+<<<<<<< HEAD
                         <?php if(count($all_students) > 0): ?>
                             <?php foreach($all_students as $student): 
                                 // Determine if student is old or new
@@ -1194,6 +1214,14 @@ $grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
                                     <td>
                                         <div class="student-info">
                                             <div class="student-avatar" style="background: <?php echo $student_color; ?>;">
+=======
+                        <?php if(!empty($all_students)): ?>
+                            <?php foreach($all_students as $student): ?>
+                                <tr style="<?php echo $student['is_old'] ? 'background-color: rgba(40, 167, 69, 0.05);' : 'background-color: rgba(0, 123, 255, 0.05);'; ?>">
+                                    <td>
+                                        <div class="student-info">
+                                            <div class="student-avatar" style="<?php echo $student['is_old'] ? 'background: #28a745;' : 'background: #007bff;'; ?>">
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                                                 <?php echo strtoupper(substr($student['fullname'], 0, 1)); ?>
                                             </div>
                                             <div class="student-details">
@@ -1230,7 +1258,16 @@ $grade_levels = $grade_levels_stmt->fetchAll(PDO::FETCH_ASSOC);
                                         <?php endif; ?>
                                     </td>
                                     <td>
+<<<<<<< HEAD
                                         <?php echo $student_badge; ?>
+=======
+                                        <?php echo $student['student_badge']; ?>
+                                        <?php if(!empty($student['enrollment_years'])): ?>
+                                            <div style="font-size: 10px; margin-top: 5px; color: #666;">
+                                                <?php echo $student['enrollment_years']; ?>
+                                            </div>
+                                        <?php endif; ?>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                                     </td>
                                     <td>
                                         <?php if($student['school_year']): ?>

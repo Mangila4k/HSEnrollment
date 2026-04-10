@@ -11,6 +11,7 @@ if(!isset($_SESSION['user']) || $_SESSION['user']['role'] != 'Student'){
 $student_id = $_SESSION['user']['id'];
 
 // Fetch student details from database
+<<<<<<< HEAD
 $stmt = $conn->prepare("SELECT * FROM users WHERE id = ?");
 $stmt->execute([$student_id]);
 $student = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -22,6 +23,17 @@ $stmt = $conn->prepare("SELECT e.*, g.grade_name
                         WHERE e.student_id = ?");
 $stmt->execute([$student_id]);
 $enroll = $stmt->fetch(PDO::FETCH_ASSOC);
+=======
+$student_query = $conn->query("SELECT * FROM users WHERE id = '$student_id'");
+$student = $student_query ? $student_query->fetch(PDO::FETCH_ASSOC) : null;
+
+// Fetch existing enrollment
+$enroll_query = $conn->query("SELECT e.*, g.grade_name, e.strand, e.form_138 
+                              FROM enrollments e 
+                              LEFT JOIN grade_levels g ON e.grade_id = g.id
+                              WHERE student_id = '$student_id'");
+$enroll = $enroll_query ? $enroll_query->fetch(PDO::FETCH_ASSOC) : null;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
 
 // Fetch grade levels
 $grades = $conn->query("SELECT * FROM grade_levels ORDER BY id");
@@ -60,6 +72,7 @@ if(isset($_POST['enroll'])){
     $grade_id = $_POST['grade_id'];
     $school_year = $_POST['school_year'];
     $strand = isset($_POST['strand']) && !empty($_POST['strand']) ? $_POST['strand'] : null;
+<<<<<<< HEAD
     $student_type = $_POST['student_type'];
     
     // Get grade name
@@ -183,9 +196,40 @@ if(isset($_POST['enroll'])){
                     }
                 } elseif($req['required'] && !$req['can_follow']) {
                     $errors[] = $req['label'] . " is required.";
+=======
+
+    // Check if student already enrolled
+    $check = $conn->query("SELECT * FROM enrollments WHERE student_id='$student_id'");
+    if($check && $check->rowCount() > 0){
+        $error = "You have already submitted an enrollment.";
+    } else {
+        // Handle file upload if Grade 11-12
+        $grade_result = $conn->query("SELECT grade_name FROM grade_levels WHERE id='$grade_id'");
+        $grade_row = $grade_result ? $grade_result->fetch(PDO::FETCH_ASSOC) : null;
+        $grade_name = $grade_row ? $grade_row['grade_name'] : '';
+        
+        $form_138 = null;
+
+        if(in_array($grade_name, ['Grade 11','Grade 12'])){
+            if(isset($_FILES['form_138']) && $_FILES['form_138']['error'] == 0){
+                $allowed = ['pdf','jpg','jpeg','png'];
+                $ext = strtolower(pathinfo($_FILES['form_138']['name'], PATHINFO_EXTENSION));
+                if(!in_array($ext, $allowed)){
+                    $error = "Form 138 must be PDF or image file.";
+                } else {
+                    $filename = "uploads/form138_".$student_id."_".time().".".$ext;
+                    if(!is_dir("../uploads")) mkdir("../uploads", 0777, true);
+                    
+                    if(move_uploaded_file($_FILES['form_138']['tmp_name'], "../".$filename)){
+                        $form_138 = $filename;
+                    } else {
+                        $error = "Failed to upload file.";
+                    }
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                 }
             }
         }
+<<<<<<< HEAD
         
         if(empty($errors)){
             // Prepare insert statement
@@ -216,12 +260,37 @@ if(isset($_POST['enroll'])){
                                         WHERE e.student_id = ?");
                 $stmt->execute([$student_id]);
                 $enroll = $stmt->fetch(PDO::FETCH_ASSOC);
+=======
+
+        if(!isset($error)){
+            $stmt = $conn->prepare("INSERT INTO enrollments (student_id, grade_id, school_year, status, strand, form_138) 
+                                    VALUES (:student_id, :grade_id, :school_year, 'Pending', :strand, :form_138)");
+            
+            $stmt->bindParam(':student_id', $student_id, PDO::PARAM_INT);
+            $stmt->bindParam(':grade_id', $grade_id, PDO::PARAM_INT);
+            $stmt->bindParam(':school_year', $school_year, PDO::PARAM_STR);
+            $stmt->bindParam(':strand', $strand, PDO::PARAM_STR);
+            $stmt->bindParam(':form_138', $form_138, PDO::PARAM_STR);
+            
+            if($stmt->execute()){
+                $success = "Enrollment submitted successfully! Wait for approval.";
+                // Refresh enrollment data
+                $enroll_query = $conn->query("SELECT e.*, g.grade_name, e.strand, e.form_138 
+                                            FROM enrollments e 
+                                            LEFT JOIN grade_levels g ON e.grade_id = g.id
+                                            WHERE student_id = '$student_id'");
+                $enroll = $enroll_query ? $enroll_query->fetch(PDO::FETCH_ASSOC) : null;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             } else {
                 $errorInfo = $stmt->errorInfo();
                 $error = "Error submitting enrollment: " . ($errorInfo[2] ?? 'Unknown error');
             }
+<<<<<<< HEAD
         } else {
             $error = implode("<br>", $errors);
+=======
+            $stmt = null; // Close statement in PDO
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
     }
 }
@@ -252,7 +321,11 @@ if(isset($_POST['enroll'])){
         }
 
         .container {
+<<<<<<< HEAD
             max-width: 900px;
+=======
+            max-width: 800px;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             margin: 0 auto;
         }
 
@@ -464,6 +537,16 @@ if(isset($_POST['enroll'])){
             margin-left: 3px;
         }
 
+<<<<<<< HEAD
+=======
+        .row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-bottom: 0;
+        }
+
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         .input-wrapper {
             position: relative;
         }
@@ -487,6 +570,7 @@ if(isset($_POST['enroll'])){
             box-shadow: 0 0 0 4px rgba(11, 79, 46, 0.1);
         }
 
+<<<<<<< HEAD
         .requirements-section {
             background: #f8f9fa;
             border-radius: 15px;
@@ -578,6 +662,16 @@ if(isset($_POST['enroll'])){
 
         .strand-section {
             background: #e8f4f8;
+=======
+        .input-wrapper input[readonly] {
+            background-color: #e9ecef;
+            cursor: not-allowed;
+            border-color: #ddd;
+        }
+
+        .strand-section {
+            background: #f8f9fa;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             border-radius: 15px;
             padding: 20px;
             margin: 20px 0;
@@ -590,6 +684,7 @@ if(isset($_POST['enroll'])){
             to { opacity: 1; transform: translateY(0); }
         }
 
+<<<<<<< HEAD
         .info-note {
             background: #e8f4f8;
             border-left: 4px solid #17a2b8;
@@ -606,6 +701,26 @@ if(isset($_POST['enroll'])){
         .info-note i {
             font-size: 18px;
             color: #17a2b8;
+=======
+        .file-input {
+            border: 2px dashed #0B4F2E;
+            padding: 20px;
+            text-align: center;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f8f9fa;
+        }
+
+        .file-input:hover {
+            background: #e8f4f8;
+        }
+
+        .file-input i {
+            font-size: 30px;
+            color: #0B4F2E;
+            margin-bottom: 10px;
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
 
         .submit-btn {
@@ -652,9 +767,20 @@ if(isset($_POST['enroll'])){
                 padding: 20px;
             }
             
+<<<<<<< HEAD
             .requirements-list {
                 grid-template-columns: 1fr;
             }
+=======
+            .row {
+                grid-template-columns: 1fr;
+            }
+            
+            .radio-group {
+                flex-direction: column;
+                gap: 10px;
+            }
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
         }
     </style>
 </head>
@@ -673,7 +799,11 @@ if(isset($_POST['enroll'])){
                 <p>Student Enrollment Application</p>
             </div>
 
+<<<<<<< HEAD
             <!-- Display Student Information -->
+=======
+            <!-- Display Student Information (Auto-fetched) -->
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             <?php if($student): ?>
             <div class="student-info">
                 <h3><i class="fas fa-user-graduate"></i> Student Information</h3>
@@ -742,17 +872,38 @@ if(isset($_POST['enroll'])){
                     </a>
                 </div>
             <?php else: ?>
+<<<<<<< HEAD
                 <form method="POST" enctype="multipart/form-data" id="enrollmentForm">
+=======
+                <form method="POST" enctype="multipart/form-data">
+                    <!-- Hidden fields with student data -->
+                    <input type="hidden" name="first_name" value="<?php echo isset($student['firstname']) ? htmlspecialchars($student['firstname']) : ''; ?>">
+                    <input type="hidden" name="middle_name" value="<?php echo isset($student['middlename']) ? htmlspecialchars($student['middlename']) : ''; ?>">
+                    <input type="hidden" name="last_name" value="<?php echo isset($student['lastname']) ? htmlspecialchars($student['lastname']) : ''; ?>">
+                    <input type="hidden" name="birthdate" value="<?php echo isset($student['birthdate']) ? htmlspecialchars($student['birthdate']) : ''; ?>">
+                    <input type="hidden" name="gender" value="<?php echo isset($student['gender']) ? htmlspecialchars($student['gender']) : ''; ?>">
+
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                     <!-- GRADE LEVEL -->
                     <div class="form-group">
                         <label for="grade">Select Grade Level <span class="required">*</span></label>
                         <div class="input-wrapper">
+<<<<<<< HEAD
                             <select name="grade_id" id="grade" onchange="updateStudentTypeOptions()" required>
                                 <option value="">-- Select Grade Level --</option>
                                 <?php
                                 $grades->execute();
                                 while($g = $grades->fetch(PDO::FETCH_ASSOC)){
                                     echo "<option value='{$g['id']}' data-grade='{$g['grade_name']}'>{$g['grade_name']}</option>";
+=======
+                            <select name="grade_id" id="grade" onchange="toggleStrand()" required>
+                                <option value="">-- Select Grade Level --</option>
+                                <?php
+                                if($grades){
+                                    while($g = $grades->fetch(PDO::FETCH_ASSOC)){
+                                        echo "<option value='{$g['id']}'>{$g['grade_name']}</option>";
+                                    }
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                                 }
                                 ?>
                             </select>
@@ -760,6 +911,7 @@ if(isset($_POST['enroll'])){
                         </div>
                     </div>
 
+<<<<<<< HEAD
                     <!-- STUDENT TYPE -->
                     <div class="form-group">
                         <label for="student_type">Student Type <span class="required">*</span></label>
@@ -779,6 +931,10 @@ if(isset($_POST['enroll'])){
 
                     <!-- STRAND SECTION (For Grade 11-12) -->
                     <div id="strandDiv" class="strand-section" style="display: none;">
+=======
+                    <!-- STRAND SECTION (Initially Hidden) -->
+                    <div id="strandDiv" class="strand-section" style="display:none;">
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                         <div class="form-group">
                             <label>Select Strand (Required for Grade 11-12)</label>
                             <div class="input-wrapper">
@@ -791,13 +947,31 @@ if(isset($_POST['enroll'])){
                                 <i class="fas fa-chevron-down" style="position: absolute; right: 16px; top: 50%; transform: translateY(-50%); color: #666;"></i>
                             </div>
                         </div>
+<<<<<<< HEAD
+=======
+
+                        <div class="form-group">
+                            <label>Upload Form 138 (Report Card) <span class="required">*</span></label>
+                            <div class="file-input" onclick="document.getElementById('form_138').click()">
+                                <i class="fas fa-cloud-upload-alt"></i>
+                                <p>Click to upload or drag and drop</p>
+                                <p style="font-size: 12px; color: #666;">PDF, JPG, JPEG, or PNG (Max 10MB)</p>
+                            </div>
+                            <input type="file" name="form_138" id="form_138" accept=".pdf,.jpg,.jpeg,.png" style="display: none;" onchange="updateFileLabel(this)">
+                            <div id="file-name" style="font-size: 13px; color: #0B4F2E; margin-top: 10px; text-align: center;"></div>
+                        </div>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                     </div>
 
                     <!-- SCHOOL YEAR -->
                     <div class="form-group">
                         <label for="school_year">School Year <span class="required">*</span></label>
                         <div class="input-wrapper">
+<<<<<<< HEAD
                             <input type="text" name="school_year" id="school_year" placeholder="e.g., 2026-2027" required>
+=======
+                            <input type="text" name="school_year" id="school_year" placeholder="e.g. 2026-2027" required>
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
                             <i class="fas fa-calendar" style="position: absolute; right: 16px; top: 50%; transform: translateY(-50%); color: #666;"></i>
                         </div>
                     </div>
@@ -817,6 +991,7 @@ if(isset($_POST['enroll'])){
     </div>
 
     <script>
+<<<<<<< HEAD
         // Complete requirements data with correct document mappings
         const requirementsData = {
             'Grade 7': {
@@ -1029,6 +1204,43 @@ if(isset($_POST['enroll'])){
             const year = today.getFullYear();
             const nextYear = year + 1;
             const schoolYearInput = document.getElementById('school_year');
+=======
+        function toggleStrand(){
+            var gradeSelect = document.getElementById('grade');
+            var strandDiv = document.getElementById('strandDiv');
+            
+            if(gradeSelect && gradeSelect.selectedIndex >= 0) {
+                var selectedOption = gradeSelect.options[gradeSelect.selectedIndex];
+                var gradeName = selectedOption ? selectedOption.text : '';
+                
+                if(gradeName == 'Grade 11' || gradeName == 'Grade 12'){
+                    strandDiv.style.display = 'block';
+                    // Make fields required
+                    document.getElementById('strand').setAttribute('required', 'required');
+                } else {
+                    strandDiv.style.display = 'none';
+                    // Remove required attribute
+                    document.getElementById('strand').removeAttribute('required');
+                }
+            }
+        }
+
+        function updateFileLabel(input) {
+            var fileName = document.getElementById('file-name');
+            if(input.files && input.files.length > 0) {
+                fileName.innerHTML = '<i class="fas fa-check-circle" style="color: #28a745;"></i> Selected: ' + input.files[0].name;
+            } else {
+                fileName.innerHTML = '';
+            }
+        }
+
+        // Auto-populate school year with current year
+        window.onload = function() {
+            var today = new Date();
+            var year = today.getFullYear();
+            var nextYear = year + 1;
+            var schoolYearInput = document.getElementById('school_year');
+>>>>>>> 9619c00ac15cb6695a12f9550c7fe2af2229f2ac
             if(schoolYearInput && !schoolYearInput.value) {
                 schoolYearInput.value = year + '-' + nextYear;
             }
